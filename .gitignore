@@ -4,6 +4,8 @@ node_modules
 .pnp.js
 
 # Build outputs
+dist-electron
+release
 dist
 build
 *.tsbuildinfo

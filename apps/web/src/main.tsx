@@ -1,11 +1,18 @@
-import { RouterProvider, createRouter } from "@tanstack/react-router";
+import {
+  RouterProvider,
+  createBrowserHistory,
+  createHashHistory,
+  createRouter,
+} from "@tanstack/react-router";
 import ReactDOM from "react-dom/client";
 
 import Loader from "./components/loader";
 import { routeTree } from "./routeTree.gen";
-
+import { isElectron } from "./env";
+const history = isElectron ? createHashHistory() : createBrowserHistory();
 const router = createRouter({
   routeTree,
+  history: history,
   defaultPreload: "intent",
   scrollRestoration: true,
   defaultPendingComponent: () => <Loader />,
@@ -16,6 +23,10 @@ declare module "@tanstack/react-router" {
   interface Register {
     router: typeof router;
   }
+}
+
+if (isElectron) {
+  document.body.classList.add("electron-overlay");
 }
 
 const rootElement = document.getElementById("app");

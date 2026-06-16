@@ -4,7 +4,10 @@ import { z } from "zod";
 
 export const env = createEnv({
   server: {
-    CORS_ORIGIN: z.url(),
+    CORS_ORIGIN: z.url().default("http://localhost:3001"),
+    OPENROUTER_API_KEY: z.string(),
+    AGENT_MODEL: z.string().default("nex-agi/nex-n2-pro:free"),
+    AGENT_INSTRUCTIONS: z.string().optional(),
     NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   },
   runtimeEnv: process.env,

@@ -1,81 +1,118 @@
-# overly-chat
+# Overly
 
-This project was created with [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack), a modern TypeScript stack that combines React, TanStack Router, Hono, and more.
+A fullscreen transparent AI chat overlay for your desktop. Stays on top of every window, invisible to screen sharing, and gets out of your way when you're not using it.
 
 ## Features
 
-- **TypeScript** - For type safety and improved developer experience
-- **TanStack Router** - File-based routing with full type safety
-- **TailwindCSS** - Utility-first CSS for rapid UI development
-- **Shared UI package** - shadcn/ui primitives live in `packages/ui`
-- **Hono** - Lightweight, performant server framework
-- **Node.js** - Runtime environment
-- **Oxlint** - Oxlint + Oxfmt (linting & formatting)
-- **Turborepo** - Optimized monorepo build system
+- Fullscreen transparent overlay — lives above all your windows
+- Click-through by default, interactive on hover
+- Hidden from taskbar, Alt+Tab, and screen capture (Teams, Meet, OBS)
+- Draggable and resizable chat window
+- Powered by OpenRouter — bring your own model
+- Encrypted API key storage via OS keychain
+
+## Apps
+
+| App | Description |
+|-----|-------------|
+| `apps/desktop` | Electron shell — overlay window + bundled server |
+| `apps/web` | React frontend — chat UI + settings |
+| `apps/server` | Hono API server — AI agent endpoint |
+| `packages/ui` | Shared component library (shadcn/ui + Tailwind) |
+| `packages/env` | Shared env validation (@t3-oss/env-core) |
 
 ## Getting Started
 
-First, install the dependencies:
+### Prerequisites
+
+- [Node.js](https://nodejs.org) 18+
+- [pnpm](https://pnpm.io) 11+
+- An [OpenRouter](https://openrouter.ai) API key
+
+### Install
 
 ```bash
 pnpm install
 ```
 
-Then, run the development server:
+### Environment
+
+`apps/server/.env`
+```env
+OPENROUTER_API_KEY=sk-or-v1-...
+CORS_ORIGIN=http://localhost:3001
+```
+
+`apps/web/.env`
+```env
+VITE_SERVER_URL=http://localhost:3000
+```
+
+### Dev
+
+Run everything together:
 
 ```bash
-pnpm run dev
+pnpm dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173) in your browser to see the web application.
-The API is running at [http://localhost:3000](http://localhost:3000).
-
-## UI Customization
-
-React web apps in this stack share shadcn/ui primitives through `packages/ui`.
-
-- Change design tokens and global styles in `packages/ui/src/styles/globals.css`
-- Update shared primitives in `packages/ui/src/components/*`
-- Adjust shadcn aliases or style config in `packages/ui/components.json` and `apps/web/components.json`
-
-### Add more shared components
-
-Run this from the project root to add more primitives to the shared UI package:
+Or individually:
 
 ```bash
-npx shadcn@latest add accordion dialog popover sheet table -c packages/ui
+pnpm dev:web       # React frontend on :3001
+pnpm dev:server    # Hono server on :3000
+pnpm dev:desktop   # Electron app (connects to :3001)
 ```
 
-Import shared components like this:
+### Build & Package
 
-```tsx
-import { Button } from "@overly-chat/ui/components/button";
+```bash
+pnpm dist:desktop
 ```
 
-### Add app-specific blocks
+Builds the web frontend, bundles the Hono server into the Electron app, and produces a platform installer in `apps/desktop/release/`.
 
-If you want to add app-specific blocks instead of shared primitives, run the shadcn CLI from `apps/web`.
+> On first launch the app will prompt you for your OpenRouter API key. It's stored encrypted using the OS keychain.
 
-## Git Hooks and Formatting
+## Shortcuts
 
-- Run checks: `pnpm run check`
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl/Cmd+Q` | Quit the app |
 
 ## Project Structure
 
 ```
 overly-chat/
 ├── apps/
-│   ├── web/         # Frontend application (React + TanStack Router)
-│   └── server/      # Backend API (Hono)
-├── packages/
-│   ├── ui/          # Shared shadcn/ui components and styles
+│   ├── desktop/     # Electron overlay shell
+│   ├── web/         # React frontend (TanStack Router)
+│   └── server/      # Hono API server
+└── packages/
+    ├── ui/          # Shared shadcn/ui components
+    └── env/         # Shared env validation
 ```
 
-## Available Scripts
+## Tech Stack
 
-- `pnpm run dev`: Start all applications in development mode
-- `pnpm run build`: Build all applications
-- `pnpm run dev:web`: Start only the web application
-- `pnpm run dev:server`: Start only the server
-- `pnpm run check-types`: Check TypeScript types across all apps
-- `pnpm run check`: Run Oxlint and Oxfmt
+- **Electron** — desktop shell
+- **React** + **TanStack Router** — frontend
+- **Hono** + **@hono/node-server** — API server
+- **Vercel AI SDK** + **OpenRouter** — AI streaming
+- **shadcn/ui** + **Tailwind CSS** — UI components
+- **Turborepo** + **pnpm** — monorepo tooling
+- **tsdown** — bundler for Electron main process
+
+## UI Components
+
+Shared shadcn/ui primitives live in `packages/ui`. To add more:
+
+```bash
+npx shadcn@latest add <component> -c packages/ui
+```
+
+Import them in any app:
+
+```tsx
+import { Button } from "@overly-chat/ui/components/button";
+```

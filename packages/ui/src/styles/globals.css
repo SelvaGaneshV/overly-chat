@@ -121,8 +121,11 @@
   * {
     @apply border-border outline-ring/50;
   }
+  .electron-overlay * {
+    cursor: default !important;
+  }
   body {
-    @apply font-sans bg-background text-foreground;
+    @apply font-sans   text-foreground;
   }
   html {
     @apply font-sans;
