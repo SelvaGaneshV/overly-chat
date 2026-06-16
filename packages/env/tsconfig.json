@@ -1,0 +1,3 @@
+{
+  "extends": "@overly-chat/config/tsconfig.base.json"
+}
