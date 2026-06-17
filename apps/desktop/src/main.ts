@@ -1,14 +1,15 @@
 import { env } from "@overly-chat/env/desktop";
 import { app, BrowserWindow, globalShortcut, ipcMain, nativeImage, safeStorage } from "electron";
 import { fork, type ChildProcess } from "node:child_process";
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 
 const CONFIG_PATH = path.join(app.getPath("userData"), "config.json");
+const SERVER_CONFIG_PATH = path.join(app.getPath("userData"), "server-config.json");
 
-const readConfig = (): Record<string, string> => {
+const readConfig = async (): Promise<Record<string, string>> => {
   try {
-    const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
+    const raw = await fs.readFile(CONFIG_PATH, "utf-8");
     const config = JSON.parse(raw);
     if (config.apiKey && safeStorage.isEncryptionAvailable()) {
       config.apiKey = safeStorage.decryptString(Buffer.from(config.apiKey, "base64"));
@@ -19,26 +20,48 @@ const readConfig = (): Record<string, string> => {
   }
 };
 
-const writeConfig = (data: Record<string, string>) => {
+const writeConfig = async (data: Record<string, string>) => {
   const toSave = { ...data };
   if (toSave.apiKey && safeStorage.isEncryptionAvailable()) {
     toSave.apiKey = safeStorage.encryptString(toSave.apiKey).toString("base64");
   }
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(toSave), "utf-8");
+  await fs.writeFile(CONFIG_PATH, JSON.stringify(toSave), "utf-8");
+};
+
+const writeServerConfig = async (config: Record<string, any>) => {
+  await fs.writeFile(
+    SERVER_CONFIG_PATH,
+    JSON.stringify(
+      {
+        apiKey: config.apiKey ?? "",
+        model: config.model ?? "",
+        instructions: config.instructions ?? "",
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
 };
 
 let serverProcess: ChildProcess | null = null;
 
-const startServer = (config: Record<string, string>) => {
-  serverProcess = fork(path.join(__dirname, "server.cjs"), [], {
-    stdio: "inherit",
-    env: {
-      ...process.env,
-      OPENROUTER_API_KEY: config.apiKey,
-      AGENT_MODEL: config.model ?? "",
-      AGENT_INSTRUCTIONS: config.instructions ?? "",
-      PORT: "3000",
-    },
+const startServer = async (config: Record<string, string>) => {
+  await writeServerConfig(config);
+  await new Promise<void>((resolve, reject) => {
+    serverProcess = fork(path.join(__dirname, "server.cjs"), [], {
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        SERVER_CONFIG_PATH,
+        PORT: "3000",
+      },
+    });
+    serverProcess.once("message", (msg) => {
+      if (msg === "ready") resolve();
+    });
+    serverProcess.once("error", reject);
+    setTimeout(resolve, 3000);
   });
 };
 
@@ -49,41 +72,21 @@ const appIcon = nativeImage.createFromPath(
   path.join(__dirname, "..", "assets", "icons", "png", "256x256.png"),
 );
 
-const createSetupWindow = () =>
-  new Promise<void>((resolve) => {
-    const win = new BrowserWindow({
-      width: 480,
-      height: 300,
-      resizable: false,
-      frame: false,
-      alwaysOnTop: true,
-      icon: appIcon,
-      webPreferences: { preload: path.join(__dirname, "preload.cjs") },
-    });
-
-    if (isDev) {
-      win.loadURL(`${DEV_SERVER_URL}/setup.html`);
-    } else {
-      win.loadFile(path.join(__dirname, "renderer", "setup.html"));
-    }
-
-    ipcMain.once("api-key-saved", () => {
-      win.close();
-      resolve();
-    });
-  });
-
 const createWindow = () => {
   const mainWindow = new BrowserWindow({
     frame: false,
     fullscreen: true,
     alwaysOnTop: true,
-    focusable: false,
+    focusable: true,
     transparent: true,
     skipTaskbar: true,
     hasShadow: false,
     icon: appIcon,
-    webPreferences: { preload: path.join(__dirname, "preload.cjs") },
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
   });
 
   mainWindow.setIgnoreMouseEvents(true, { forward: true });
@@ -114,27 +117,36 @@ const createWindow = () => {
 app.on("ready", async () => {
   if (process.platform === "win32") app.setAppUserModelId(" ");
 
-  let config = readConfig();
+  let config = await readConfig();
 
-  if (!config.apiKey) {
-    ipcMain.on("save-api-key", (_, key: string) => {
-      writeConfig({ apiKey: key });
-      ipcMain.emit("api-key-saved");
-    });
-    await createSetupWindow();
-    config = readConfig();
-  }
-
-  ipcMain.handle("get-config", () => {
-    const c = readConfig();
-    return { apiKey: c.apiKey ?? "", model: c.model ?? "", instructions: c.instructions ?? "" };
+  ipcMain.handle("get-config", async () => {
+    const c = await readConfig();
+    return {
+      apiKey: c.apiKey ?? "",
+      model: c.model ?? "",
+      instructions: c.instructions ?? "",
+      alwaysOnTop: c.alwaysOnTop !== "false",
+    };
   });
 
-  ipcMain.handle("save-config", (_, cfg: { apiKey: string; model: string; instructions: string }) => {
-    writeConfig(cfg);
-  });
+  ipcMain.handle(
+    "save-config",
+    async (
+      _,
+      cfg: { apiKey: string; model: string; instructions: string; alwaysOnTop: boolean },
+    ) => {
+      const { alwaysOnTop, ...rest } = cfg;
+      await writeConfig({ ...rest, alwaysOnTop: String(alwaysOnTop) });
+      if (!isDev) await writeServerConfig(cfg);
 
-  if (!isDev) startServer(config);
+      const win = BrowserWindow.getAllWindows()[0];
+      if (win) {
+        win.setAlwaysOnTop(alwaysOnTop, "screen-saver");
+      }
+    },
+  );
+
+  if (!isDev) await startServer(config);
 
   createWindow();
 

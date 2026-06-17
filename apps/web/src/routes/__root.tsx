@@ -39,9 +39,8 @@ function RootComponent() {
         disableTransitionOnChange
         storageKey="vite-ui-theme"
       >
-        <div className="fixed inset-0 overflow-hidden">
-          <Outlet />
-        </div>
+        <Outlet />
+
         <Toaster richColors />
       </ThemeProvider>
       <TanStackRouterDevtools position="bottom-left" />

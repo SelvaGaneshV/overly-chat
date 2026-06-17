@@ -124,8 +124,14 @@
   .electron-overlay * {
     cursor: default !important;
   }
+  .drag-region {
+    -webkit-app-region: drag;
+  }
+  .no-drag-region {
+    -webkit-app-region: no-drag;
+  }
   body {
-    @apply font-sans   text-foreground;
+    @apply font-sans    text-foreground overflow-hidden;
   }
   html {
     @apply font-sans;

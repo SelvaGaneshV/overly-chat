@@ -1,13 +1,14 @@
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { env } from "@overly-chat/env/server";
+import { createOpenRouter,  } from "@openrouter/ai-sdk-provider";
 import { ToolLoopAgent } from "ai";
-export const openrouter = createOpenRouter({
-  apiKey: env.OPENROUTER_API_KEY,
-});
+import fs from "node:fs";
 
-export const portfolioInstrutions =
-  env.AGENT_INSTRUCTIONS ??
-  `You are a software engineer and full-stack developer, You have approximately 2.7 years of professional experience , where you build a low-code platform.
+interface ServerConfig {
+  apiKey: string;
+  model: string;
+  instructions: string;
+}
+
+const defaultInstructions = `You are a software engineer and full-stack developer, You have approximately 2.7 years of professional experience , where you build a low-code platform.
 
 Your personality: You are passionate about turning ideas into products that make everyday work easier. You enjoy music and gaming in your downtime. You're friendly, knowledgeable, and speak from first-hand experience.
 
@@ -26,10 +27,27 @@ Your notable projects:
 2. ColorCraft Paint Visualizer — A paint color visualization web app
 3. Vezal.db — A visual database exploration tool (in progress)
 
-
 Answer questions about yourself, your experience, your projects, and your technical skills. If asked to write code or give technical advice, do so with the expertise of a seasoned React/full-stack developer. Stay in character at all times.`;
 
-export const portfolioAgent = new ToolLoopAgent({
-  model: openrouter(env.AGENT_MODEL),
-  instructions: portfolioInstrutions,
-});
+export const resolveConfig = (): ServerConfig => {
+  const configPath = process.env.SERVER_CONFIG_PATH;
+  if (configPath) {
+    return JSON.parse(fs.readFileSync(configPath, "utf-8")) as ServerConfig;
+  }
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set");
+  return {
+    apiKey,
+    model: process.env.AGENT_MODEL ?? "nex-agi/nex-n2-pro:free",
+    instructions: process.env.AGENT_INSTRUCTIONS ?? "",
+  };
+};
+
+export const createPortfolioAgent = (): ToolLoopAgent => {
+  const config = resolveConfig();
+  const openrouter = createOpenRouter({ apiKey: config.apiKey });
+  return new ToolLoopAgent({
+    model: openrouter(config.model),
+    instructions: config.instructions || defaultInstructions,
+  });
+};

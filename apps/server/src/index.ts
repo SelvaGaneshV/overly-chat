@@ -1,10 +1,10 @@
 import { serve } from "@hono/node-server";
+import { env } from "@overly-chat/env/server";
 import { createAgentUIStreamResponse, type UIMessage } from "ai";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import { portfolioAgent } from "./agents/portfolio";
-import { env } from "@overly-chat/env/server";
+import { createPortfolioAgent } from "./agents/portfolio";
 
 const app = new Hono();
 
@@ -24,10 +24,25 @@ app.post("/chat", async (c) => {
     messages: UIMessage[];
   } = await c.req.json();
   return createAgentUIStreamResponse({
-    agent: portfolioAgent,
+    agent: createPortfolioAgent(),
     uiMessages: messages,
   });
 });
+
+// app.get("/models", async () => {
+//   const config = resolveConfig();
+//   const res = await fetch("https://openrouter.ai/api/v1/models", {
+//     method: "GET",
+//     headers: {
+//       Authorization: `Bearer ${config.apiKey}`,
+//     },
+//   });
+//   if (!res.ok) throw new HTTPException(500);
+//   const { data = { data:rawModels } } = (await res.json()) as {
+//     data: ModelsListResponse;
+//   };
+//   const models = rawModel;
+// });
 
 serve(
   {

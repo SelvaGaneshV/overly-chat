@@ -10,6 +10,7 @@ import Loader from "./components/loader";
 import { routeTree } from "./routeTree.gen";
 import { isElectron } from "./env";
 const history = isElectron ? createHashHistory() : createBrowserHistory();
+
 const router = createRouter({
   routeTree,
   history: history,

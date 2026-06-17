@@ -1,7 +1,7 @@
 import tailwindcss from "@tailwindcss/vite";
+import babel from "@rolldown/plugin-babel";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
-import react from "@vitejs/plugin-react";
-import { resolve } from "node:path";
+import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 export default defineConfig({
@@ -12,14 +12,7 @@ export default defineConfig({
   resolve: {
     tsconfigPaths: true,
   },
-  build: {
-    rollupOptions: {
-      input: {
-        main: resolve(__dirname, "index.html"),
-        setup: resolve(__dirname, "setup.html"),
-      },
-    },
-  },
+
   plugins: [
     tailwindcss(),
     tanstackRouter({
@@ -27,5 +20,8 @@ export default defineConfig({
       autoCodeSplitting: true,
     }),
     react(),
+    babel({
+      presets: [reactCompilerPreset()],
+    }),
   ],
 });
