@@ -24,9 +24,9 @@
   "devDependencies": {
     "@overly-chat/config": "workspace:*",
     "@types/node": "catalog:",
-    "oxfmt": "^0.53.0",
-    "oxlint": "^1.68.0",
-    "turbo": "^2.9.16",
+    "oxfmt": "^0.72.0",
+    "oxlint": "^1.87.0",
+    "turbo": "^2.11.7",
     "typescript": "catalog:"
   },
   "packageManager": "pnpm@11.2.2"
