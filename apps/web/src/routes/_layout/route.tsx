@@ -1,10 +1,11 @@
 import { ModeToggle } from "@/components/mode-toggle";
+import { WindowSnapLayouts } from "@/components/window-snap-layouts";
 import bubbleLogo from "@/assets/bubble-logo.png";
 import { Button } from "@overly-chat/ui/components/button";
 import { createFileRoute, Link, Outlet, useLocation } from "@tanstack/react-router";
-import { ArrowLeftIcon, MinusIcon, Settings, XIcon } from "lucide-react";
+import { ArrowLeftIcon, Ghost, GripVertical, MinusIcon, Move, Settings, XIcon } from "lucide-react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 const ROUTE_METADATA: Record<string, { title: string }> = {
   "/": {
     title: "Overly",
@@ -167,30 +168,37 @@ function ResizeGrip() {
   );
 }
 
+import { cn } from "@overly-chat/ui/lib/utils";
+
 // Collapsed bubble: outer ring is the native OS drag handle, inner logo is
-// a real (no-drag) button. Clicks don't fire on drag regions — the OS
-// claims the gesture — so the clickable element must opt out with
-// no-drag-region, exactly like the header buttons do. No IPC is involved
-// in dragging, so there's nothing here that can disturb the window size.
+// a real (no-drag) button.
 function BubbleButton({ onExpand }: { onExpand: () => void }) {
   return (
     <div
-      title="Drag to move"
-      className="drag-region flex size-16 touch-none items-center justify-center rounded-full border bg-background shadow-xl"
+      title="Drag to reposition · Click logo to open"
+      className="drag-region group relative flex size-16 touch-none items-center justify-center rounded-full border border-border/70 bg-background/95 backdrop-blur-md shadow-2xl transition-all duration-300 hover:ring-2 hover:ring-primary/40 hover:scale-105 active:scale-95"
     >
+      {/* Visual drag handle indicator badge */}
+      <div
+        className="drag-region pointer-events-none absolute -top-1 -right-1 flex size-5 items-center justify-center rounded-full border border-border/80 bg-background/95 text-muted-foreground shadow-xs transition-transform duration-200 group-hover:scale-110"
+        title="Drag handle"
+      >
+        <Move className="size-2.5 text-foreground/80 pointer-events-none" />
+      </div>
+
       <button
         type="button"
         onClick={onExpand}
         aria-label="Expand chat"
-        title="Expand chat"
-        className="no-drag-region flex size-12 items-center justify-center rounded-full transition-transform duration-200 hover:scale-105 active:scale-95"
+        title="Click to expand chat"
+        className="no-drag-region group/btn flex size-12 items-center justify-center rounded-full transition-transform duration-200"
       >
         <img
           src={bubbleLogo}
           alt=""
           draggable={false}
           onDragStart={(e) => e.preventDefault()}
-          className="pointer-events-none size-10 rounded-full select-none"
+          className="pointer-events-none size-10 rounded-full select-none transition-transform duration-200 group-hover/btn:scale-110 group-active/btn:scale-90"
         />
       </button>
     </div>
@@ -200,84 +208,163 @@ function BubbleButton({ onExpand }: { onExpand: () => void }) {
 function RouteComponent() {
   const { pathname } = useLocation();
   const [isBubble, setIsBubble] = useState(false);
+  const [isMinimizing, setIsMinimizing] = useState(false);
+  const [isGhostMode, setIsGhostMode] = useState(false);
 
   const minimize = () => {
-    setIsBubble(true);
-    window.nativeApi?.minimizeToBubble();
+    if (isMinimizing || isBubble) return;
+    setIsMinimizing(true);
+    setTimeout(() => {
+      setIsBubble(true);
+      setIsMinimizing(false);
+      window.nativeApi?.minimizeToBubble();
+    }, 180);
   };
 
   const expand = () => {
-    setIsBubble(false);
     window.nativeApi?.expandFromBubble();
+    setIsBubble(false);
   };
 
-  if (isBubble) {
-    return (
-      <div className="flex h-screen w-screen items-center justify-center bg-transparent">
-        <BubbleButton onExpand={expand} />
-      </div>
-    );
-  }
+  useEffect(() => {
+    const unsubGhost = window.nativeApi?.onGhostModeChange?.((active) => {
+      setIsGhostMode(active);
+    });
+    const unsubMin = window.nativeApi?.onRequestMinimize?.(() => {
+      if (!isBubble && !isMinimizing) {
+        minimize();
+      }
+    });
+    const unsubExp = window.nativeApi?.onRequestExpand?.(() => {
+      if (isBubble) {
+        expand();
+      }
+    });
+    return () => {
+      unsubGhost?.();
+      unsubMin?.();
+      unsubExp?.();
+    };
+  }, [isBubble, isMinimizing]);
+
+  const toggleGhost = () => {
+    const next = !isGhostMode;
+    setIsGhostMode(next);
+    window.nativeApi?.setGhostMode(next);
+  };
 
   return (
-    <div className="relative flex h-screen w-screen flex-col overflow-hidden rounded-lg border bg-background">
-      <div className="drag-region flex h-10 shrink-0 cursor-grab items-center justify-between rounded-t-lg border-b bg-muted/30 px-3 select-none active:cursor-grabbing">
-        <div className="flex items-center gap-1">
-          {pathname !== "/" && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="no-drag-region size-6 shrink-0"
-              render={
-                <Link to="/">
-                  <ArrowLeftIcon size={12} />
-                </Link>
-              }
-            />
-          )}
-          <span className="text-xs font-medium text-muted-foreground">
-            {ROUTE_METADATA[pathname]?.title ?? "Overly"}
-          </span>
+    <div className="relative flex h-screen w-screen overflow-hidden select-none bg-transparent">
+      {/* Bubble view (when minimized) */}
+      {isBubble && (
+        <div className="flex h-full w-full items-center justify-center animate-in zoom-in-75 fade-in-0 duration-200">
+          <BubbleButton onExpand={expand} />
         </div>
-        <div className="no-drag-region flex items-center">
-          {pathname === "/" && (
+      )}
+
+      {/* Main panel view - preserved in DOM to avoid state and scroll resets */}
+      <div
+        className={cn(
+          "relative flex h-full w-full flex-col overflow-hidden rounded-xl border border-border/50 bg-background/90 backdrop-blur-xl shadow-2xl transition-all duration-200 origin-top-right",
+          isBubble && "hidden pointer-events-none",
+          isMinimizing
+            ? "scale-75 opacity-0 translate-x-2 -translate-y-2 duration-180 ease-in pointer-events-none"
+            : !isBubble && "animate-in zoom-in-95 fade-in-0 duration-200 ease-out",
+          isGhostMode ? "opacity-70 ring-2 ring-primary/50" : "",
+        )}
+      >
+        {isGhostMode && (
+          <div className="no-drag-region z-50 flex items-center justify-between bg-primary/90 px-3 py-1 text-[11px] font-medium text-primary-foreground shadow-sm">
+            <span className="flex items-center gap-1.5">
+              <Ghost className="size-3 animate-pulse" />
+              Ghost Mode · Clicks pass through to background apps
+            </span>
+            <button
+              type="button"
+              onClick={() => toggleGhost()}
+              className="rounded bg-primary-foreground/20 px-1.5 py-0.5 hover:bg-primary-foreground/30 font-semibold"
+            >
+              Resume (Ctrl+Shift+P)
+            </button>
+          </div>
+        )}
+
+        <div className="drag-region flex h-10 shrink-0 items-center justify-between rounded-t-xl border-b bg-muted/40 px-3 select-none">
+          <div
+            className="drag-region flex items-center gap-1.5 select-none"
+            title="Drag to move window"
+          >
+            {pathname !== "/" && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="no-drag-region size-6 shrink-0"
+                render={
+                  <Link to="/">
+                    <ArrowLeftIcon size={12} />
+                  </Link>
+                }
+              />
+            )}
+            <GripVertical className="size-3.5 text-muted-foreground/70 shrink-0 pointer-events-none" />
+            <span className="pointer-events-none text-xs font-semibold text-foreground/80 tracking-tight select-none">
+              {ROUTE_METADATA[pathname]?.title ?? "Overly"}
+            </span>
+          </div>
+
+          <div className="no-drag-region flex items-center gap-0.5">
+            {pathname === "/" && (
+              <Button
+                variant={isGhostMode ? "default" : "ghost"}
+                size="icon"
+                className="size-6 text-muted-foreground hover:text-foreground"
+                title="Toggle Ghost Mode (Ctrl+Shift+P) - click through overlay"
+                onClick={toggleGhost}
+              >
+                <Ghost size={12} />
+              </Button>
+            )}
+            {pathname === "/" && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-6"
+                render={
+                  <Link to="/settings">
+                    <Settings size={12} />
+                  </Link>
+                }
+              />
+            )}
+            <ModeToggle />
             <Button
               variant="ghost"
               size="icon"
               className="size-6"
-              render={
-                <Link to="/settings">
-                  <Settings size={12} />
-                </Link>
-              }
-            />
-          )}
-          <ModeToggle />
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6"
-            title="Minimize to bubble"
-            onClick={minimize}
-          >
-            <MinusIcon size={12} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6"
-            onClick={() => window.nativeApi?.closeWindow()}
-          >
-            <XIcon size={12} />
-          </Button>
+              title="Minimize to bubble"
+              onClick={minimize}
+            >
+              <MinusIcon size={12} />
+            </Button>
+            <WindowSnapLayouts />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6 hover:bg-destructive hover:text-destructive-foreground"
+              title="Close window"
+              onClick={() => window.nativeApi?.closeWindow()}
+            >
+              <XIcon size={12} />
+            </Button>
+          </div>
         </div>
+        <div className="no-drag-region flex min-h-0 flex-1 flex-col">
+          <Outlet />
+        </div>
+        <ResizeEdgeRight />
+        <ResizeEdgeBottom />
+        <ResizeGrip />
       </div>
-      <div className="no-drag-region flex min-h-0 flex-1 flex-col">
-        <Outlet />
-      </div>
-      <ResizeEdgeRight />
-      <ResizeEdgeBottom />
-      <ResizeGrip />
     </div>
   );
 }

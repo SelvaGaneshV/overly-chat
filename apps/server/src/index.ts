@@ -4,7 +4,7 @@ import { createAgentUIStreamResponse, type UIMessage } from "ai";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import { createPortfolioAgent } from "./agents/portfolio";
+import { createCopilotAgent, PERSONAS, resolveConfig } from "./agents/portfolio";
 
 const app = new Hono();
 
@@ -17,32 +17,141 @@ app.use(
   }),
 );
 
-app.post("/chat", async (c) => {
-  const {
-    messages,
-  }: {
-    messages: UIMessage[];
-  } = await c.req.json();
-  return createAgentUIStreamResponse({
-    agent: createPortfolioAgent(),
-    uiMessages: messages,
-  });
+app.get("/health", (c) => c.json({ ok: true }));
+
+app.get("/personas", (c) => {
+  const list = Object.entries(PERSONAS).map(([id, p]) => ({
+    id,
+    name: p.name,
+  }));
+  return c.json({ personas: list });
 });
 
-// app.get("/models", async () => {
-//   const config = resolveConfig();
-//   const res = await fetch("https://openrouter.ai/api/v1/models", {
-//     method: "GET",
-//     headers: {
-//       Authorization: `Bearer ${config.apiKey}`,
-//     },
-//   });
-//   if (!res.ok) throw new HTTPException(500);
-//   const { data = { data:rawModels } } = (await res.json()) as {
-//     data: ModelsListResponse;
-//   };
-//   const models = rawModel;
-// });
+interface FreeModel {
+  id: string;
+  name: string;
+  context_length: number;
+  description: string;
+}
+
+let cachedFreeModels: FreeModel[] | null = null;
+let lastModelsFetch = 0;
+let cachedApiKey = "";
+
+const isFreeModel = (m: any): boolean => {
+  if (!m || typeof m !== "object") return false;
+  const id = typeof m.id === "string" ? m.id.toLowerCase() : "";
+  if (id.endsWith(":free") || id === "openrouter/free") return true;
+
+  const prompt = Number(m.pricing?.prompt ?? -1);
+  const completion = Number(m.pricing?.completion ?? -1);
+  const request = Number(m.pricing?.request ?? 0);
+  return prompt === 0 && completion === 0 && request === 0;
+};
+
+app.get("/models", async (c) => {
+  const config = resolveConfig();
+  const now = Date.now();
+
+  if (
+    cachedFreeModels &&
+    cachedApiKey === config.apiKey &&
+    now - lastModelsFetch < 1000 * 60 * 15
+  ) {
+    return c.json({ models: cachedFreeModels });
+  }
+
+  try {
+    const headers: Record<string, string> = {};
+    if (config.apiKey) {
+      headers["Authorization"] = `Bearer ${config.apiKey}`;
+    }
+
+    const res = await fetch("https://openrouter.ai/api/v1/models", { headers });
+    if (res.ok) {
+      const json = (await res.json()) as { data?: Array<any> };
+      if (Array.isArray(json.data) && json.data.length > 0) {
+        const freeModels: FreeModel[] = json.data.filter(isFreeModel).map((m) => ({
+          id: m.id,
+          name: m.name || m.id,
+          context_length: typeof m.context_length === "number" ? m.context_length : 32768,
+          description: m.description || "Free model via OpenRouter",
+        }));
+
+        freeModels.sort((a, b) => {
+          if (a.id === "openrouter/free") return -1;
+          if (b.id === "openrouter/free") return 1;
+          return a.name.localeCompare(b.name);
+        });
+
+        cachedFreeModels = freeModels;
+        cachedApiKey = config.apiKey;
+        lastModelsFetch = now;
+        return c.json({ models: freeModels });
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to fetch live OpenRouter free models:", err);
+  }
+
+  if (cachedFreeModels) {
+    return c.json({ models: cachedFreeModels });
+  }
+
+  return c.json({ models: [] });
+});
+
+app.post("/chat", async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+  const parsed = body as {
+    messages?: UIMessage[];
+    webSearch?: boolean;
+    model?: string;
+    persona?: string;
+    instructions?: string;
+    openWindows?: Array<{ id: string; name: string }>;
+    body?: {
+      webSearch?: boolean;
+      model?: string;
+      persona?: string;
+      instructions?: string;
+      openWindows?: Array<{ id: string; name: string }>;
+    };
+  };
+
+  const { messages } = parsed;
+  const webSearch = parsed.webSearch ?? parsed.body?.webSearch ?? false;
+  const model = parsed.model ?? parsed.body?.model;
+  const persona = parsed.persona ?? parsed.body?.persona;
+  const instructions = parsed.instructions ?? parsed.body?.instructions;
+  const openWindows = parsed.openWindows ?? parsed.body?.openWindows;
+
+  if (!Array.isArray(messages)) {
+    return c.json({ error: "`messages` must be an array" }, 400);
+  }
+
+  try {
+    return createAgentUIStreamResponse({
+      agent: createCopilotAgent({
+        webSearch,
+        model,
+        persona,
+        instructions,
+        openWindows,
+      }),
+      uiMessages: messages,
+    });
+  } catch (err) {
+    console.error("chat failed", err);
+    const message = err instanceof Error ? err.message : "Failed to generate response";
+    return c.json({ error: message }, 500);
+  }
+});
 
 serve(
   {

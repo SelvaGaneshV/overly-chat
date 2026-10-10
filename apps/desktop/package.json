@@ -17,6 +17,12 @@
     "start": "electron .",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@hono/node-server": "^2.1.4",
+    "@openrouter/ai-sdk-provider": "^3.1.0",
+    "ai": "^7.0.136",
+    "hono": "^4.13.13"
+  },
   "devDependencies": {
     "@types/node": "catalog:",
     "concurrently": "^10.0.6",
@@ -25,7 +31,6 @@
     "tsdown": "catalog:",
     "typescript": "catalog:"
   },
-  "productName": "Overly Chat",
   "build": {
     "appId": "com.overlychat.app",
     "productName": "Overly Chat",
@@ -48,10 +53,5 @@
       "icon": "assets/icons/png/512x512.png"
     }
   },
-  "dependencies": {
-    "@hono/node-server": "^2.1.4",
-    "@openrouter/ai-sdk-provider": "^3.1.0",
-    "ai": "^7.0.136",
-    "hono": "^4.13.13"
-  }
+  "productName": "Overly Chat"
 }

@@ -13,13 +13,13 @@ A fullscreen transparent AI chat overlay for your desktop. Stays on top of every
 
 ## Apps
 
-| App | Description |
-|-----|-------------|
+| App            | Description                                      |
+| -------------- | ------------------------------------------------ |
 | `apps/desktop` | Electron shell — overlay window + bundled server |
-| `apps/web` | React frontend — chat UI + settings |
-| `apps/server` | Hono API server — AI agent endpoint |
-| `packages/ui` | Shared component library (shadcn/ui + Tailwind) |
-| `packages/env` | Shared env validation (@t3-oss/env-core) |
+| `apps/web`     | React frontend — chat UI + settings              |
+| `apps/server`  | Hono API server — AI agent endpoint              |
+| `packages/ui`  | Shared component library (shadcn/ui + Tailwind)  |
+| `packages/env` | Shared env validation (@t3-oss/env-core)         |
 
 ## Getting Started
 
@@ -38,12 +38,14 @@ pnpm install
 ### Environment
 
 `apps/server/.env`
+
 ```env
 OPENROUTER_API_KEY=sk-or-v1-...
 CORS_ORIGIN=http://localhost:3001
 ```
 
 `apps/web/.env`
+
 ```env
 VITE_SERVER_URL=http://localhost:3000
 ```
@@ -76,9 +78,14 @@ Builds the web frontend, bundles the Hono server into the Electron app, and prod
 
 ## Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl/Cmd+Q` | Quit the app |
+| Shortcut               | Action                            |
+| ---------------------- | --------------------------------- |
+| `Ctrl/Cmd+Shift+Space` | Summon / Focus / Toggle Overly    |
+| `Ctrl/Cmd+Shift+P`     | Toggle Ghost Mode (Click-through) |
+| `Ctrl/Cmd+K`           | Toggle Web Search                 |
+| `Escape`               | Stop generation / Dismiss         |
+| `Ctrl/Cmd+Q`           | Quit the app                      |
+| `Ctrl/Cmd+Shift+I`     | Toggle Developer Tools            |
 
 ## Project Structure
 
