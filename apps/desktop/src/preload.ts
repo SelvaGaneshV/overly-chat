@@ -12,10 +12,17 @@ export interface WindowConfig {
 
 export type AppConfig = ChatConfig & WindowConfig;
 
+export type ChatWindowSize = {
+  width: number;
+  height: number;
+};
+
 contextBridge.exposeInMainWorld("nativeApi", {
   platform: process.platform,
-  setIgnoreMouseEvents: (ignore: boolean) => ipcRenderer.send("set-ignore-mouse-events", ignore),
-  setInteractive: (interactive: boolean) => ipcRenderer.send("set-interactive", interactive),
+  resizeChatWindow: (size: ChatWindowSize) => ipcRenderer.send("resize-chat-window", size),
+  resizeChatWindowEnd: () => ipcRenderer.send("resize-chat-window-end"),
+  minimizeToBubble: () => ipcRenderer.send("minimize-to-bubble"),
+  expandFromBubble: () => ipcRenderer.send("expand-from-bubble"),
   getConfig: (): Promise<AppConfig> => ipcRenderer.invoke("get-config"),
   saveConfig: (config: AppConfig) => ipcRenderer.invoke("save-config", config),
   closeWindow: () => ipcRenderer.send("close-window"),

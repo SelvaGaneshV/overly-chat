@@ -10,19 +10,19 @@
     "start": "node dist/index.mjs"
   },
   "dependencies": {
-    "@hono/node-server": "^1.14.4",
-    "@openrouter/ai-sdk-provider": "^2.9.1",
+    "@hono/node-server": "^2.1.4",
+    "@openrouter/ai-sdk-provider": "^3.1.0",
     "@overly-chat/env": "workspace:*",
-    "ai": "^6.0.205",
+    "ai": "^7.0.136",
     "dotenv": "catalog:",
-    "hono": "^4.8.2",
+    "hono": "^4.13.13",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@overly-chat/config": "workspace:*",
     "@types/node": "catalog:",
-    "tsdown": "^0.21.9",
-    "tsx": "^4.19.2",
+    "tsdown": "catalog:",
+    "tsx": "^4.23.15",
     "typescript": "catalog:"
   }
 }

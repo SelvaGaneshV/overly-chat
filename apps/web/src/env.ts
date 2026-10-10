@@ -14,8 +14,10 @@ declare global {
   interface Window {
     nativeApi?: {
       platform: string;
-      setIgnoreMouseEvents: (ignore: boolean) => void;
-      setInteractive: (interactive: boolean) => void;
+      resizeChatWindow: (size: { width: number; height: number }) => void;
+      resizeChatWindowEnd: () => void;
+      minimizeToBubble: () => void;
+      expandFromBubble: () => void;
       saveApiKey: (key: string) => void;
       getConfig: () => Promise<AppConfig>;
       saveConfig: (config: AppConfig) => Promise<void>;
@@ -24,7 +26,6 @@ declare global {
     desktopBridge?: unknown;
   }
 }
-
 
 export const isElectron =
   typeof window !== "undefined" &&
