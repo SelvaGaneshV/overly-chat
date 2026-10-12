@@ -8,7 +8,7 @@ import { createAgentUIStreamResponse, type UIMessage } from "ai";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import { createCopilotAgent, PERSONAS, resolveConfig, setInMemoryConfig } from "./agents/portfolio";
+import { createCopilotAgent, PERSONAS, resolveConfig, setInMemoryConfig } from "./agents/agent";
 
 const resolveSessionToken = (): string => {
   if (process.env.OVERLY_SESSION_TOKEN) return process.env.OVERLY_SESSION_TOKEN;

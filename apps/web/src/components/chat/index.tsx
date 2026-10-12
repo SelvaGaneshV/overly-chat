@@ -115,7 +115,6 @@ const PERSONAS = [
   { id: "general", name: "General Copilot" },
   { id: "coder", name: "Coding Copilot" },
   { id: "meeting", name: "Meeting Whisperer" },
-  { id: "portfolio", name: "Portfolio Mode" },
 ];
 
 const getMessageText = (message: { parts: Array<{ type: string; text?: string }> }) =>

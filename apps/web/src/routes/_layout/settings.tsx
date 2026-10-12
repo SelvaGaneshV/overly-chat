@@ -45,7 +45,6 @@ const PERSONAS = [
     name: "Meeting & Interview Whisperer",
     description: "Ultra-brief bullets and talking points",
   },
-  { id: "portfolio", name: "Portfolio Mode", description: "Original interactive portfolio resume" },
 ];
 
 function NavItem({
