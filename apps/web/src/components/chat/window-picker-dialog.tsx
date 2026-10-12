@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@overly-chat/ui/components/button";
 import {
   Dialog,
@@ -30,7 +30,7 @@ export function WindowPickerDialog({ open, onOpenChange, onAttach }: WindowPicke
     }
     try {
       setLoading(true);
-      const list = await window.nativeApi.getOpenWindows();
+      const list = await window.nativeApi.getOpenWindows({ thumbnails: true });
       setWindows(list);
     } catch (err) {
       console.error("Failed to list windows:", err);
@@ -40,18 +40,22 @@ export function WindowPickerDialog({ open, onOpenChange, onAttach }: WindowPicke
     }
   };
 
-  const handleOpenChange = (nextOpen: boolean) => {
-    onOpenChange(nextOpen);
-    if (nextOpen) {
+  useEffect(() => {
+    if (open) {
       fetchWindows();
+    } else {
+      setWindows([]);
     }
-  };
+  }, [open]);
 
   const handleSelectWindow = async (win: OpenWindowInfo) => {
     if (!window.nativeApi?.captureWindow) return;
     try {
       setCapturingId(win.id);
-      const dataUrl = await window.nativeApi.captureWindow(win.id);
+      let dataUrl = await window.nativeApi.captureWindow(win.id);
+      if (!dataUrl && win.thumbnail) {
+        dataUrl = win.thumbnail;
+      }
       if (dataUrl) {
         const res = await fetch(dataUrl);
         const blob = await res.blob();
@@ -74,7 +78,7 @@ export function WindowPickerDialog({ open, onOpenChange, onAttach }: WindowPicke
   };
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md sm:max-w-lg rounded-xl border border-border/80 bg-background/95 backdrop-blur-xl p-4 shadow-2xl">
         <DialogHeader className="mb-2">
           <div className="flex items-center justify-between">
@@ -98,7 +102,15 @@ export function WindowPickerDialog({ open, onOpenChange, onAttach }: WindowPicke
           </DialogDescription>
         </DialogHeader>
 
-        {loading && windows.length === 0 ? (
+        {!window.nativeApi?.getOpenWindows ? (
+          <div className="flex h-36 flex-col items-center justify-center gap-1.5 text-center text-muted-foreground">
+            <AppWindow className="size-8 opacity-40" />
+            <span className="text-xs font-medium">Desktop app required</span>
+            <span className="text-[11px] opacity-75">
+              Window detection is only available in the Overly Chat desktop app.
+            </span>
+          </div>
+        ) : loading && windows.length === 0 ? (
           <div className="flex h-44 flex-col items-center justify-center gap-2 text-muted-foreground">
             <Spinner className="size-5" />
             <span className="text-xs">Scanning open windows…</span>
@@ -110,6 +122,15 @@ export function WindowPickerDialog({ open, onOpenChange, onAttach }: WindowPicke
             <span className="text-[11px] opacity-75">
               Make sure apps are running and not minimized to tray.
             </span>
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={fetchWindows}
+              disabled={loading}
+              className="mt-2 text-xs"
+            >
+              Scan Again
+            </Button>
           </div>
         ) : (
           <div className="grid max-h-[360px] grid-cols-2 gap-2.5 overflow-y-auto pr-1">

@@ -1,3 +1,7 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { serve } from "@hono/node-server";
 import { env } from "@overly-chat/env/server";
 import { createAgentUIStreamResponse, type UIMessage } from "ai";
@@ -5,6 +9,23 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { createCopilotAgent, PERSONAS, resolveConfig, setInMemoryConfig } from "./agents/portfolio";
+
+const resolveSessionToken = (): string => {
+  if (process.env.OVERLY_SESSION_TOKEN) return process.env.OVERLY_SESSION_TOKEN;
+  if (env.OVERLY_SESSION_TOKEN) return env.OVERLY_SESSION_TOKEN;
+  const tokenFile = path.join(os.tmpdir(), "overly-dev-session.token");
+  try {
+    const existing = fs.readFileSync(tokenFile, "utf-8").trim();
+    if (existing) return existing;
+  } catch {}
+  const newToken = crypto.randomUUID();
+  try {
+    fs.writeFileSync(tokenFile, newToken, { encoding: "utf-8", mode: 0o600 });
+  } catch {}
+  return newToken;
+};
+
+const sessionToken = resolveSessionToken();
 
 // Listen for in-memory config updates over Node.js IPC pipe (when forked by Electron)
 if (typeof process.on === "function") {
@@ -26,27 +47,34 @@ app.use(logger());
 app.use(
   "/*",
   cors({
-    origin: env.CORS_ORIGIN ?? "*",
+    origin: (origin) => {
+      if (!origin) return env.CORS_ORIGIN;
+      if (origin === env.CORS_ORIGIN) return origin;
+      if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return origin;
+      return env.CORS_ORIGIN;
+    },
     allowMethods: ["GET", "POST", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization", "x-overly-token"],
   }),
 );
 
-// Require session token authentication if configured
-const sessionToken = process.env.OVERLY_SESSION_TOKEN || env.OVERLY_SESSION_TOKEN;
-if (sessionToken) {
-  app.use("/*", async (c, next) => {
-    if (c.req.method === "OPTIONS" || c.req.path === "/health") {
-      return next();
-    }
-    const auth = c.req.header("Authorization");
-    const token = auth?.startsWith("Bearer ") ? auth.slice(7) : c.req.header("x-overly-token");
-    if (token !== sessionToken) {
-      return c.json({ error: "Unauthorized" }, 401);
-    }
+// Require session token authentication on all protected routes with constant-time comparison
+app.use("/*", async (c, next) => {
+  if (c.req.method === "OPTIONS" || c.req.path === "/health") {
     return next();
-  });
-}
+  }
+  const auth = c.req.header("Authorization");
+  const token = auth?.startsWith("Bearer ") ? auth.slice(7) : c.req.header("x-overly-token");
+  if (!token) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const tokenBuf = Buffer.from(token);
+  const sessionBuf = Buffer.from(sessionToken);
+  if (tokenBuf.length !== sessionBuf.length || !crypto.timingSafeEqual(tokenBuf, sessionBuf)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  return next();
+});
 
 // In-memory config sync endpoint for standalone dev server
 app.post("/internal/config", async (c) => {
@@ -84,6 +112,7 @@ interface FreeModel {
 let cachedFreeModels: FreeModel[] | null = null;
 let lastModelsFetch = 0;
 let cachedApiKey = "";
+let inFlightModelsFetch: Promise<FreeModel[] | null> | null = null;
 
 const isFreeModel = (m: any): boolean => {
   if (!m || typeof m !== "object") return false;
@@ -108,44 +137,51 @@ app.get("/models", async (c) => {
     return c.json({ models: cachedFreeModels });
   }
 
-  try {
-    const headers: Record<string, string> = {};
-    if (config.apiKey) {
-      headers["Authorization"] = `Bearer ${config.apiKey}`;
-    }
+  if (inFlightModelsFetch) {
+    const models = await inFlightModelsFetch;
+    return c.json({ models: models ?? cachedFreeModels ?? [] });
+  }
 
-    const res = await fetch("https://openrouter.ai/api/v1/models", { headers });
-    if (res.ok) {
-      const json = (await res.json()) as { data?: Array<any> };
-      if (Array.isArray(json.data) && json.data.length > 0) {
-        const freeModels: FreeModel[] = json.data.filter(isFreeModel).map((m) => ({
-          id: m.id,
-          name: m.name || m.id,
-          context_length: typeof m.context_length === "number" ? m.context_length : 32768,
-          description: m.description || "Free model via OpenRouter",
-        }));
-
-        freeModels.sort((a, b) => {
-          if (a.id === "openrouter/free") return -1;
-          if (b.id === "openrouter/free") return 1;
-          return a.name.localeCompare(b.name);
-        });
-
-        cachedFreeModels = freeModels;
-        cachedApiKey = config.apiKey;
-        lastModelsFetch = now;
-        return c.json({ models: freeModels });
+  inFlightModelsFetch = (async () => {
+    try {
+      const headers: Record<string, string> = {};
+      if (config.apiKey) {
+        headers["Authorization"] = `Bearer ${config.apiKey}`;
       }
+
+      const res = await fetch("https://openrouter.ai/api/v1/models", { headers });
+      if (res.ok) {
+        const json = (await res.json()) as { data?: Array<any> };
+        if (Array.isArray(json.data) && json.data.length > 0) {
+          const freeModels: FreeModel[] = json.data.filter(isFreeModel).map((m) => ({
+            id: m.id,
+            name: m.name || m.id,
+            context_length: typeof m.context_length === "number" ? m.context_length : 32768,
+            description: m.description || "Free model via OpenRouter",
+          }));
+
+          freeModels.sort((a, b) => {
+            if (a.id === "openrouter/free") return -1;
+            if (b.id === "openrouter/free") return 1;
+            return a.name.localeCompare(b.name);
+          });
+
+          cachedFreeModels = freeModels;
+          cachedApiKey = config.apiKey;
+          lastModelsFetch = Date.now();
+          return freeModels;
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to fetch live OpenRouter free models:", err);
+    } finally {
+      inFlightModelsFetch = null;
     }
-  } catch (err) {
-    console.warn("Failed to fetch live OpenRouter free models:", err);
-  }
+    return cachedFreeModels;
+  })();
 
-  if (cachedFreeModels) {
-    return c.json({ models: cachedFreeModels });
-  }
-
-  return c.json({ models: [] });
+  const models = await inFlightModelsFetch;
+  return c.json({ models: models ?? [] });
 });
 
 app.post("/chat", async (c) => {

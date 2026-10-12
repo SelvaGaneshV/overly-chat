@@ -1,4 +1,5 @@
 import { useForm } from "@tanstack/react-form";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
@@ -15,7 +16,7 @@ import { Separator } from "@overly-chat/ui/components/separator";
 import { Skeleton } from "@overly-chat/ui/components/skeleton";
 import { ChevronDown } from "lucide-react";
 import { isElectron } from "../../env";
-import { serverFetch } from "../../lib/server-api";
+import { fetchModels } from "../../lib/server-api";
 
 export const Route = createFileRoute("/_layout/settings")({
   component: SettingsComponent,
@@ -27,13 +28,6 @@ const required =
     !value.trim() ? `${label} is required` : undefined;
 
 type Section = "app" | "chat" | "shortcuts";
-
-interface AvailableModel {
-  id: string;
-  name: string;
-  context_length?: number;
-  description?: string;
-}
 
 const PERSONAS = [
   {
@@ -101,12 +95,17 @@ function SettingRow({
 }
 
 function SettingsComponent() {
+  const queryClient = useQueryClient();
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
   const defaultSection: Section = isElectron ? "app" : "chat";
   const [activeSection, setActiveSection] = useState<Section>(defaultSection);
-  const [models, setModels] = useState<AvailableModel[]>([]);
   const [isCustomModel, setIsCustomModel] = useState(false);
+
+  const { data: models = [] } = useQuery({
+    queryKey: ["models"],
+    queryFn: fetchModels,
+  });
 
   const form = useForm({
     defaultValues: {
@@ -117,38 +116,17 @@ function SettingsComponent() {
       alwaysOnTop: true,
       opacity: 0.96,
       workingDir: "",
+      shareWindows: false,
     },
     onSubmit: async ({ value }) => {
       await window.nativeApi?.saveConfig(value);
       setSaved(true);
-      serverFetch("/models")
-        .then((res) => res.json())
-        .then((data) => {
-          if (Array.isArray(data?.models) && data.models.length > 0) {
-            setModels(data.models);
-          }
-        })
-        .catch(() => {});
+      await queryClient.invalidateQueries({ queryKey: ["models"] });
       setTimeout(() => setSaved(false), 2000);
     },
   });
 
   useEffect(() => {
-    const loadModels = () => {
-      serverFetch("/models")
-        .then((res) => res.json())
-        .then((data) => {
-          if (Array.isArray(data?.models) && data.models.length > 0) {
-            setModels(data.models);
-            const currentModel = form.getFieldValue("model");
-            if (currentModel && !data.models.some((m: { id: string }) => m.id === currentModel)) {
-              setIsCustomModel(true);
-            }
-          }
-        })
-        .catch(() => {});
-    };
-
     window.nativeApi?.getConfig().then((config) => {
       form.setFieldValue("apiKey", config.apiKey);
       form.setFieldValue("model", config.model || "openrouter/free");
@@ -157,12 +135,19 @@ function SettingsComponent() {
       form.setFieldValue("alwaysOnTop", config.alwaysOnTop);
       form.setFieldValue("opacity", config.opacity ?? 0.96);
       form.setFieldValue("workingDir", config.workingDir ?? "");
+      form.setFieldValue("shareWindows", config.shareWindows ?? false);
       setLoading(false);
-      loadModels();
     });
-
-    loadModels();
   }, []);
+
+  useEffect(() => {
+    if (models.length > 0) {
+      const currentModel = form.getFieldValue("model");
+      if (currentModel && !models.some((m) => m.id === currentModel)) {
+        setIsCustomModel(true);
+      }
+    }
+  }, [models]);
 
   if (loading)
     return (
@@ -317,7 +302,8 @@ function SettingsComponent() {
                         className="flex h-8 items-center justify-between gap-2 rounded border border-input bg-background px-2.5 py-1 text-xs text-foreground hover:bg-muted/40 focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer min-w-44"
                       >
                         <span className="truncate">
-                          {PERSONAS.find((p) => p.id === field.state.value)?.name ?? field.state.value}
+                          {PERSONAS.find((p) => p.id === field.state.value)?.name ??
+                            field.state.value}
                         </span>
                         <ChevronDown className="size-3.5 shrink-0 opacity-60" />
                       </DropdownMenuTrigger>
@@ -333,7 +319,9 @@ function SettingsComponent() {
                               <div>
                                 <div className="font-medium">{p.name}</div>
                                 {p.description && (
-                                  <div className="text-[10px] text-muted-foreground">{p.description}</div>
+                                  <div className="text-[10px] text-muted-foreground">
+                                    {p.description}
+                                  </div>
                                 )}
                               </div>
                             </DropdownMenuRadioItem>
@@ -384,7 +372,10 @@ function SettingsComponent() {
                         </span>
                         <ChevronDown className="size-3.5 shrink-0 opacity-60" />
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start" className="w-(--anchor-width) min-w-[280px] max-h-72 overflow-y-auto">
+                      <DropdownMenuContent
+                        align="start"
+                        className="w-(--anchor-width) min-w-[280px] max-h-72 overflow-y-auto"
+                      >
                         <DropdownMenuRadioGroup
                           value={field.state.value}
                           onValueChange={(val) => {
@@ -457,6 +448,25 @@ function SettingsComponent() {
                 )}
               </form.Field>
             </div>
+
+            <Separator />
+
+            <form.Field name="shareWindows">
+              {(field) => (
+                <SettingRow
+                  label="Desktop Window Awareness"
+                  description="Share titles of active desktop windows with the AI model for context."
+                  control={
+                    <input
+                      type="checkbox"
+                      checked={field.state.value}
+                      onChange={(e) => field.handleChange(e.target.checked)}
+                      className="h-4 w-4 accent-primary cursor-pointer"
+                    />
+                  }
+                />
+              )}
+            </form.Field>
 
             <Separator />
           </>

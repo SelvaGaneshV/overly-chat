@@ -4,6 +4,7 @@ export interface ChatConfig {
   instructions: string;
   persona?: string;
   workingDir?: string;
+  shareWindows?: boolean;
 }
 
 export interface WindowConfig {
@@ -48,12 +49,9 @@ declare global {
       closeWindow: () => void;
       setGhostMode: (enabled: boolean) => void;
       captureScreen: () => Promise<string | null>;
-      getOpenWindows?: () => Promise<OpenWindowInfo[]>;
+      getOpenWindows?: (opts?: { thumbnails?: boolean }) => Promise<OpenWindowInfo[]>;
       captureWindow?: (windowId: string) => Promise<string | null>;
-      execCommand?: (opts: {
-        command: string;
-        cwd?: string;
-      }) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+      supportsTerminal?: boolean;
       onGhostModeChange: (callback: (enabled: boolean) => void) => () => void;
       onRequestMinimize?: (callback: () => void) => () => void;
       onRequestExpand?: (callback: () => void) => () => void;

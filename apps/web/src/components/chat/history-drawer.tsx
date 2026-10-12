@@ -2,34 +2,15 @@ import { Button } from "@overly-chat/ui/components/button";
 import type { UIMessage } from "ai";
 import { MessageSquare, Plus, Trash2, X } from "lucide-react";
 
-export interface ChatSession {
-  id: string;
-  title: string;
-  timestamp: number;
-  messages: UIMessage[];
-  model?: string;
-  persona?: string;
-}
+import type { ChatSession } from "./session-storage";
 
-const STORAGE_KEY = "overly_chat_sessions_v1";
+export {
+  type ChatSession,
+  getStoredSessions,
+  sanitizeMessagesForStorage,
+  saveStoredSessions,
+} from "./session-storage";
 
-export const getStoredSessions = (): ChatSession[] => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw) as ChatSession[];
-  } catch {
-    return [];
-  }
-};
-
-export const saveStoredSessions = (sessions: ChatSession[]) => {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions.slice(0, 30)));
-  } catch (err) {
-    console.error("Failed to save sessions to localStorage:", err);
-  }
-};
 
 export function HistoryDrawer({
   isOpen,

@@ -9,20 +9,41 @@ import {
   nativeImage,
   safeStorage,
   screen,
+  shell,
   Tray,
 } from "electron";
-import { exec, fork, type ChildProcess } from "node:child_process";
+import { fork, type ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-const sessionToken = crypto.randomUUID();
+const getSessionToken = (): string => {
+  if (process.env.OVERLY_SESSION_TOKEN) return process.env.OVERLY_SESSION_TOKEN;
+  const tokenFile = path.join(os.tmpdir(), "overly-dev-session.token");
+  try {
+    const existing = fsSync.readFileSync(tokenFile, "utf-8").trim();
+    if (existing) return existing;
+  } catch {}
+  const newToken = crypto.randomUUID();
+  try {
+    fsSync.writeFileSync(tokenFile, newToken, { encoding: "utf-8", mode: 0o600 });
+  } catch {}
+  return newToken;
+};
+
+const sessionToken = getSessionToken();
 let serverPort = env.PORT;
 
 const CONFIG_PATH = path.join(app.getPath("userData"), "config.json");
 
+let cachedConfig: Record<string, string> | null = null;
+
 const readConfig = async (): Promise<Record<string, string>> => {
+  if (cachedConfig) {
+    return cachedConfig;
+  }
   try {
     const raw = await fs.readFile(CONFIG_PATH, "utf-8");
     const config = JSON.parse(raw);
@@ -34,14 +55,24 @@ const readConfig = async (): Promise<Record<string, string>> => {
         // Already plaintext, keep config.apiKey
       }
     }
+    cachedConfig = config;
     return config;
   } catch {
+    cachedConfig = {};
     return {};
   }
 };
 
 const writeConfig = async (data: Record<string, string>) => {
-  const toSave = { ...data };
+  cachedConfig = { ...(cachedConfig ?? {}), ...data };
+  const toSave = { ...cachedConfig };
+  if (toSave.apiKey && safeStorage.isEncryptionAvailable()) {
+    try {
+      toSave.apiKey = safeStorage.encryptString(toSave.apiKey).toString("base64");
+    } catch (err) {
+      console.warn("Failed to encrypt API key with safeStorage:", err);
+    }
+  }
   await fs.writeFile(CONFIG_PATH, JSON.stringify(toSave, null, 2), "utf-8");
 };
 
@@ -410,26 +441,64 @@ const createWindow = async () => {
       const sources = await desktopCapturer.getSources({
         types: ["screen"],
         thumbnailSize: {
-          width: Math.round(dw * display.scaleFactor),
-          height: Math.round(dh * display.scaleFactor),
+          width: Math.min(1920, Math.round(dw * display.scaleFactor)),
+          height: Math.min(1080, Math.round(dh * display.scaleFactor)),
         },
       });
       if (!sources || sources.length === 0) return null;
       const match = sources.find((s) => s.display_id === String(display.id)) ?? sources[0];
-      return match.thumbnail.toDataURL();
+      if (match.thumbnail.isEmpty()) return null;
+
+      // Downscale to max 1440px and compress to JPEG for 95% smaller IPC and AI vision payload
+      const originalSize = match.thumbnail.getSize();
+      let targetWidth = originalSize.width;
+      let targetHeight = originalSize.height;
+      const MAX_DIM = 1440;
+      if (targetWidth > MAX_DIM || targetHeight > MAX_DIM) {
+        if (targetWidth >= targetHeight) {
+          targetHeight = Math.round((targetHeight * MAX_DIM) / targetWidth);
+          targetWidth = MAX_DIM;
+        } else {
+          targetWidth = Math.round((targetWidth * MAX_DIM) / targetHeight);
+          targetHeight = MAX_DIM;
+        }
+      }
+      const resized = match.thumbnail.resize({ width: targetWidth, height: targetHeight, quality: "better" });
+      const jpegBuffer = resized.toJPEG(82);
+      return `data:image/jpeg;base64,${jpegBuffer.toString("base64")}`;
     } catch (err) {
       console.error("[capture-screen] error:", err);
       return null;
     }
   });
 
-  ipcMain.handle("get-open-windows", async () => {
+  ipcMain.handle("get-open-windows", async (_, opts?: { thumbnails?: boolean }) => {
     try {
-      const sources = await desktopCapturer.getSources({
-        types: ["window"],
-        thumbnailSize: { width: 480, height: 270 },
-        fetchWindowIcons: true,
-      });
+      const withThumbnails = opts?.thumbnails !== false;
+      let sources: Electron.DesktopCapturerSource[] = [];
+
+      try {
+        sources = await desktopCapturer.getSources({
+          types: ["window"],
+          thumbnailSize: withThumbnails ? { width: 480, height: 270 } : { width: 1, height: 1 },
+          fetchWindowIcons: withThumbnails,
+        });
+      } catch (primaryErr) {
+        console.warn(
+          "[get-open-windows] primary capture failed, retrying without icons:",
+          primaryErr,
+        );
+        try {
+          sources = await desktopCapturer.getSources({
+            types: ["window"],
+            thumbnailSize: withThumbnails ? { width: 480, height: 270 } : { width: 1, height: 1 },
+            fetchWindowIcons: false,
+          });
+        } catch (retryErr) {
+          console.error("[get-open-windows] retry without icons also failed:", retryErr);
+          return [];
+        }
+      }
 
       return sources
         .filter((s) => {
@@ -441,12 +510,37 @@ const createWindow = async () => {
             !name.toLowerCase().includes("overly chat")
           );
         })
-        .map((s) => ({
-          id: s.id,
-          name: s.name,
-          thumbnail: s.thumbnail.toDataURL(),
-          appIcon: s.appIcon?.toDataURL() || undefined,
-        }));
+        .map((s) => {
+          let thumbnail = "";
+          if (withThumbnails) {
+            try {
+              if (s.thumbnail && !s.thumbnail.isEmpty()) {
+                const jpegBuffer = s.thumbnail.toJPEG(75);
+                thumbnail = `data:image/jpeg;base64,${jpegBuffer.toString("base64")}`;
+              }
+            } catch (err) {
+              console.warn(`[get-open-windows] failed to convert thumbnail for ${s.name}:`, err);
+            }
+          }
+
+          let appIcon: string | undefined = undefined;
+          if (withThumbnails) {
+            try {
+              if (s.appIcon && !s.appIcon.isEmpty()) {
+                appIcon = s.appIcon.toDataURL();
+              }
+            } catch (err) {
+              console.warn(`[get-open-windows] failed to convert icon for ${s.name}:`, err);
+            }
+          }
+
+          return {
+            id: s.id,
+            name: s.name,
+            thumbnail,
+            appIcon,
+          };
+        });
     } catch (err) {
       console.error("[get-open-windows] error:", err);
       return [];
@@ -457,54 +551,29 @@ const createWindow = async () => {
     try {
       const sources = await desktopCapturer.getSources({
         types: ["window"],
-        thumbnailSize: { width: 1920, height: 1080 },
+        thumbnailSize: { width: 1440, height: 900 },
       });
       const match = sources.find((s) => s.id === windowId || s.name === windowId);
-      if (!match) return null;
-      return match.thumbnail.toDataURL();
+      if (!match || match.thumbnail.isEmpty()) return null;
+      const jpegBuffer = match.thumbnail.toJPEG(85);
+      return `data:image/jpeg;base64,${jpegBuffer.toString("base64")}`;
     } catch (err) {
       console.error("[capture-window] error:", err);
       return null;
     }
   });
 
-  ipcMain.handle("exec-command", async (_, { command, cwd }: { command: string; cwd?: string }) => {
-    let resolvedCwd = os.homedir();
-    if (cwd) {
-      try {
-        await fs.access(cwd);
-        resolvedCwd = cwd;
-      } catch {
-        // Fall back to home if path doesn't exist
-      }
-    }
-    return new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
-      const proc = exec(
-        command,
-        {
-          cwd: resolvedCwd,
-          timeout: 30_000,
-          shell: process.platform === "win32" ? "cmd.exe" : "/bin/sh",
-        },
-        (err, stdout, stderr) => {
-          resolve({
-            stdout: stdout.slice(0, 20_000),
-            stderr: stderr.slice(0, 5_000),
-            exitCode: typeof err?.code === "number" ? err.code : err ? 1 : 0,
-          });
-        },
-      );
-      proc.on("error", (err) => {
-        resolve({ stdout: "", stderr: err.message, exitCode: 1 });
-      });
-    });
-  });
-
+  let lastResizeTime = 0;
   ipcMain.on("resize-chat-window", (_, size: { width: number; height: number }) => {
     if (!mainWindow || mainWindow.isDestroyed() || isBubble) return;
     const reqW = Number(size?.width);
     const reqH = Number(size?.height);
     if (!Number.isFinite(reqW) || !Number.isFinite(reqH)) return;
+
+    const now = Date.now();
+    // Throttle resize calls to max ~60fps (~16ms) to avoid queueing OS window manager operations
+    if (now - lastResizeTime < 16) return;
+    lastResizeTime = now;
 
     const current = mainWindow.getBounds();
     const display = screen.getDisplayMatching(current);
@@ -523,7 +592,6 @@ const createWindow = async () => {
     nx = clamp(nx, area.x - nextWidth + 80, area.x + area.width - 80);
     ny = clamp(ny, area.y - nextHeight + 80, area.y + area.height - 80);
 
-    const now = Date.now();
     if (now - lastResizeLog > 500) {
       lastResizeLog = now;
     }
@@ -665,6 +733,26 @@ const createWindow = async () => {
     persistBounds(nextBounds);
   });
 
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (isDev && (url === DEV_SERVER_URL || url.startsWith(`${DEV_SERVER_URL}/`))) {
+      return;
+    }
+    if (!isDev && url.startsWith("file://")) {
+      return;
+    }
+    event.preventDefault();
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      void shell.openExternal(url);
+    }
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      void shell.openExternal(url);
+    }
+    return { action: "deny" };
+  });
+
   if (isDev) {
     mainWindow.loadURL(DEV_SERVER_URL);
   } else {
@@ -705,6 +793,7 @@ app.on("ready", async () => {
       alwaysOnTop: c.alwaysOnTop !== "false",
       opacity: c.opacity ? Number(c.opacity) : 0.96,
       workingDir: c.workingDir ?? "",
+      shareWindows: c.shareWindows === "true",
     };
   });
 
@@ -720,13 +809,15 @@ app.on("ready", async () => {
         alwaysOnTop: boolean;
         opacity?: number;
         workingDir?: string;
+        shareWindows?: boolean;
       },
     ) => {
-      const { alwaysOnTop, opacity, workingDir, ...rest } = cfg;
+      const { alwaysOnTop, opacity, workingDir, shareWindows, ...rest } = cfg;
       await writeConfig({
         ...rest,
         alwaysOnTop: String(alwaysOnTop),
         opacity: String(opacity ?? 0.96),
+        shareWindows: String(shareWindows ?? false),
         ...(workingDir !== undefined ? { workingDir } : {}),
       });
       await syncConfigToServer(cfg);

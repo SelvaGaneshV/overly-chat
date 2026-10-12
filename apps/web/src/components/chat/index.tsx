@@ -1,5 +1,6 @@
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
+import { useQuery } from "@tanstack/react-query";
+import { DefaultChatTransport, type UIMessage, type ChatStatus } from "ai";
 import {
   AlertTriangleIcon,
   AppWindow,
@@ -19,7 +20,7 @@ import {
   Terminal,
   XIcon,
 } from "lucide-react";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   DropdownMenu,
@@ -28,9 +29,17 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@overly-chat/ui/components/dropdown-menu";
-import { serverFetch } from "../../lib/server-api";
-import { CommandConfirmDialog } from "./command-confirm-dialog";
-import { WindowPickerDialog } from "./window-picker-dialog";
+import { fetchModels, serverFetch, type AvailableModel } from "../../lib/server-api";
+
+const CommandConfirmDialog = lazy(() =>
+  import("./command-confirm-dialog").then((m) => ({ default: m.CommandConfirmDialog })),
+);
+const WindowPickerDialog = lazy(() =>
+  import("./window-picker-dialog").then((m) => ({ default: m.WindowPickerDialog })),
+);
+const HistoryDrawer = lazy(() =>
+  import("./history-drawer").then((m) => ({ default: m.HistoryDrawer })),
+);
 import {
   Attachment,
   AttachmentPreview,
@@ -71,9 +80,8 @@ import {
 import {
   type ChatSession,
   getStoredSessions,
-  HistoryDrawer,
   saveStoredSessions,
-} from "./history-drawer";
+} from "./session-storage";
 
 const SUGGESTIONS = [
   {
@@ -94,13 +102,6 @@ const SUGGESTIONS = [
     prompt: "Help me write a concise, professional reply to this message.",
   },
 ];
-
-interface AvailableModel {
-  id: string;
-  name: string;
-  context_length?: number;
-  description?: string;
-}
 
 const PERSONAS = [
   { id: "general", name: "General Copilot" },
@@ -191,14 +192,262 @@ const WindowSnipAction = () => {
         <AppWindow size={15} />
         <span className="hidden sm:inline text-xs">Window</span>
       </PromptInputButton>
-      <WindowPickerDialog
-        open={open}
-        onOpenChange={setOpen}
-        onAttach={(file) => attachments.add([file])}
-      />
+      <Suspense fallback={null}>
+        {open && (
+          <WindowPickerDialog
+            open={open}
+            onOpenChange={setOpen}
+            onAttach={(file) => attachments.add([file])}
+          />
+        )}
+      </Suspense>
     </>
   );
 };
+
+interface ChatMessageItemProps {
+  message: UIMessage;
+  isLastAssistant: boolean;
+  status: ChatStatus;
+  copiedId: string | null;
+  onCopy: (id: string, text: string) => void;
+  onRegenerate: () => void;
+}
+
+const ChatMessageItem = memo(
+  function ChatMessageItem({
+    message,
+    isLastAssistant,
+    status,
+    copiedId,
+    onCopy,
+    onRegenerate,
+  }: ChatMessageItemProps) {
+    const messageText = getMessageText(message);
+    const copyKey = `${message.id}-copy`;
+    const hasContent = message.parts.some(
+      (p) =>
+        p.type === "text" ||
+        p.type === "file" ||
+        p.type === "source-url" ||
+        p.type === "source-document" ||
+        p.type === "reasoning" ||
+        p.type === "dynamic-tool" ||
+        p.type.startsWith("tool-"),
+    );
+
+    return (
+      <Fragment key={message.id}>
+        <Message from={message.role}>
+          <MessageContent>
+            {message.parts.map((part, i) => {
+              const key = `${message.id}-${i}`;
+              switch (part.type) {
+                case "text":
+                  return (
+                    <MessageResponse key={key}>
+                      {(part as { text: string }).text}
+                    </MessageResponse>
+                  );
+                case "file": {
+                  const file = part as {
+                    url: string;
+                    mediaType?: string;
+                    filename?: string;
+                  };
+                  const isImage = file.mediaType?.startsWith("image/");
+                  if (isImage) {
+                    return (
+                      <img
+                        key={key}
+                        src={file.url}
+                        alt={file.filename || "Attachment"}
+                        className="max-h-48 max-w-full rounded-lg border object-contain"
+                      />
+                    );
+                  }
+                  return (
+                    <span key={key} className="text-xs text-muted-foreground">
+                      📎 {file.filename || file.mediaType || "Attachment"}
+                    </span>
+                  );
+                }
+                case "source-url": {
+                  const source = part as {
+                    url: string;
+                    title?: string;
+                  };
+                  return (
+                    <a
+                      key={key}
+                      href={source.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-primary underline underline-offset-2"
+                    >
+                      {source.title || source.url}
+                    </a>
+                  );
+                }
+                case "source-document": {
+                  const doc = part as {
+                    title: string;
+                    filename?: string;
+                  };
+                  return (
+                    <span key={key} className="text-xs text-muted-foreground">
+                      📄 {doc.title || doc.filename || "Source"}
+                    </span>
+                  );
+                }
+                case "reasoning": {
+                  const reasoning = part as { text: string };
+                  if (!reasoning.text) return null;
+                  return (
+                    <details
+                      key={key}
+                      className="rounded-md bg-muted/50 px-2 py-1 text-xs text-muted-foreground"
+                    >
+                      <summary className="cursor-pointer font-medium">Reasoning</summary>
+                      <p className="mt-1 whitespace-pre-wrap">{reasoning.text}</p>
+                    </details>
+                  );
+                }
+                default: {
+                  if (part.type === "dynamic-tool" || part.type.startsWith("tool-")) {
+                    const p = part as unknown as {
+                      toolName?: string;
+                      toolCallId?: string;
+                      state?: string;
+                      input?: { command?: string; cwd?: string; description?: string };
+                      output?: { stdout?: string; stderr?: string; exitCode?: number };
+                      args?: { command?: string; cwd?: string; description?: string };
+                      result?: { stdout?: string; stderr?: string; exitCode?: number };
+                      errorText?: string;
+                    };
+                    const toolName =
+                      p.toolName ??
+                      (part.type === "dynamic-tool"
+                        ? undefined
+                        : part.type.replace(/^tool-/, ""));
+                    if (toolName !== "run_command") return null;
+
+                    const cmd = String(p.input?.command ?? p.args?.command ?? "");
+                    const cwd =
+                      (p.input?.cwd ?? p.args?.cwd)
+                        ? String(p.input?.cwd ?? p.args?.cwd)
+                        : undefined;
+                    const res = p.output ?? p.result;
+                    const isRunning =
+                      p.state === "input-streaming" ||
+                      p.state === "input-available" ||
+                      p.state === "call" ||
+                      p.state === "partial-call";
+
+                    return (
+                      <div
+                        key={key}
+                        className="my-1 rounded-md border border-border/50 bg-black/80 font-mono text-xs overflow-hidden"
+                      >
+                        {/* Header */}
+                        <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/30 bg-white/5">
+                          <Terminal className="size-3 text-amber-400 shrink-0" />
+                          <span className="text-amber-300/80 flex-1 truncate">{cmd}</span>
+                          {isRunning && (
+                            <Loader2Icon className="size-3 text-muted-foreground animate-spin shrink-0" />
+                          )}
+                          {!isRunning && res && (
+                            <span
+                              className={`text-[10px] shrink-0 ${
+                                res.exitCode === 0 ? "text-green-500" : "text-red-400"
+                              }`}
+                            >
+                              exit {res.exitCode}
+                            </span>
+                          )}
+                        </div>
+                        {/* CWD */}
+                        {cwd && (
+                          <div className="px-3 py-0.5 text-[10px] text-blue-400/60 border-b border-border/20">
+                            in: {cwd}
+                          </div>
+                        )}
+                        {/* Output */}
+                        {isRunning && !res && (
+                          <div className="px-3 py-2 text-muted-foreground/60 italic text-[11px]">
+                            Running…
+                          </div>
+                        )}
+                        {res?.stdout && (
+                          <pre className="px-3 py-2 text-green-300 whitespace-pre-wrap break-all leading-relaxed max-h-64 overflow-y-auto">
+                            {res.stdout}
+                          </pre>
+                        )}
+                        {res?.stderr && (
+                          <pre className="px-3 py-2 text-red-400 whitespace-pre-wrap break-all leading-relaxed border-t border-border/30 max-h-32 overflow-y-auto">
+                            {res.stderr}
+                          </pre>
+                        )}
+                        {p.errorText && (
+                          <pre className="px-3 py-2 text-red-400 whitespace-pre-wrap break-all leading-relaxed border-t border-border/30 max-h-32 overflow-y-auto">
+                            {p.errorText}
+                          </pre>
+                        )}
+                      </div>
+                    );
+                  }
+                  return null;
+                }
+              }
+            })}
+            {!hasContent && (
+              <span className="text-xs text-muted-foreground italic">
+                {status === "submitted" && isLastAssistant
+                  ? "Thinking…"
+                  : "Empty response"}
+              </span>
+            )}
+          </MessageContent>
+        </Message>
+        {messageText && (
+          <MessageActions>
+            <MessageAction
+              onClick={() => onCopy(copyKey, messageText)}
+              label="Copy"
+              tooltip="Copy"
+            >
+              {copiedId === copyKey ? (
+                <CheckIcon className="size-3 text-green-500" />
+              ) : (
+                <CopyIcon className="size-3" />
+              )}
+            </MessageAction>
+            {isLastAssistant && status !== "streaming" && status !== "submitted" && (
+              <MessageAction
+                onClick={onRegenerate}
+                label="Retry"
+                tooltip="Regenerate response"
+              >
+                <RefreshCcwIcon className="size-3" />
+              </MessageAction>
+            )}
+          </MessageActions>
+        )}
+      </Fragment>
+    );
+  },
+  (prev, next) => {
+    if (
+      prev.message === next.message &&
+      prev.isLastAssistant === next.isLastAssistant &&
+      prev.copiedId === next.copiedId &&
+      (!prev.isLastAssistant || prev.status === next.status)
+    ) {
+      return true;
+    }
+    return false;
+  },
+);
 
 export const Chat = () => {
   const [text, setText] = useState<string>("");
@@ -207,12 +456,31 @@ export const Chat = () => {
   const [terminalAccess, setTerminalAccess] = useState<boolean>(false);
   const [model, setModel] = useState<string>("openrouter/free");
   const [persona, setPersona] = useState<string>("general");
-  const [modelsList, setModelsList] = useState<AvailableModel[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  sessionIdRef.current = currentSessionId;
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const openWindowsRef = useRef<Array<{ id: string; name: string }>>([]);
+  const shareWindowsRef = useRef<boolean>(false);
   const workingDirRef = useRef<string>("");
+
+  // TanStack Query for models API: cached, deduped, and shared across components
+  const { data: modelsList = [] } = useQuery({
+    queryKey: ["models"],
+    queryFn: fetchModels,
+  });
+
+  useEffect(() => {
+    if (modelsList.length > 0) {
+      setModel((prev) => {
+        if (!prev || !modelsList.some((m) => m.id === prev)) {
+          return modelsList[0].id;
+        }
+        return prev;
+      });
+    }
+  }, [modelsList]);
 
   // Pending terminal command waiting for user confirmation
   const [pendingCommand, setPendingCommand] = useState<{
@@ -222,41 +490,60 @@ export const Chat = () => {
     resolve: (allowed: boolean) => void;
   } | null>(null);
 
-  // Periodically refresh open windows list so model is continuously aware
+  // Refresh open windows list only when enabled and window is visible
   useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
     const refreshWindows = () => {
+      if (!shareWindowsRef.current || document.hidden) {
+        if (!shareWindowsRef.current) openWindowsRef.current = [];
+        return;
+      }
       window.nativeApi
-        ?.getOpenWindows?.()
+        ?.getOpenWindows?.({ thumbnails: false })
         .then((wins) => {
-          openWindowsRef.current = wins.map((w) => ({ id: w.id, name: w.name }));
-        })
-        .catch(() => {});
-    };
-    refreshWindows();
-    const interval = setInterval(refreshWindows, 10000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Initialize config, models, and saved sessions
-  useEffect(() => {
-    setSessions(getStoredSessions());
-
-    const loadModels = () => {
-      serverFetch("/models")
-        .then((res) => res.json())
-        .then((data) => {
-          if (Array.isArray(data?.models) && data.models.length > 0) {
-            setModelsList(data.models);
-            setModel((prev) => {
-              if (!prev || !data.models.some((m: { id: string }) => m.id === prev)) {
-                return data.models[0].id;
-              }
-              return prev;
-            });
+          if (shareWindowsRef.current) {
+            openWindowsRef.current = wins.map((w) => ({ id: w.id, name: w.name }));
+          } else {
+            openWindowsRef.current = [];
           }
         })
         .catch(() => {});
     };
+
+    refreshWindows();
+
+    const start = () => {
+      if (interval) clearInterval(interval);
+      interval = setInterval(refreshWindows, 30000);
+    };
+
+    const stop = () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
+
+    const handleVisibility = () => {
+      if (document.hidden) {
+        stop();
+      } else {
+        refreshWindows();
+        start();
+      }
+    };
+
+    start();
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, []);
+
+  // Initialize config and saved sessions
+  useEffect(() => {
+    setSessions(getStoredSessions());
 
     window.nativeApi?.getConfig().then((cfg) => {
       if (cfg.model) setModel(cfg.model);
@@ -264,7 +551,9 @@ export const Chat = () => {
       if (cfg.workingDir) {
         workingDirRef.current = cfg.workingDir;
       }
-      loadModels();
+      if (cfg.shareWindows !== undefined) {
+        shareWindowsRef.current = cfg.shareWindows;
+      }
     });
 
     const unsubscribe = window.nativeApi?.onConfigChange?.((cfg) => {
@@ -273,10 +562,10 @@ export const Chat = () => {
       if (cfg.workingDir) {
         workingDirRef.current = cfg.workingDir;
       }
-      loadModels();
+      if (cfg.shareWindows !== undefined) {
+        shareWindowsRef.current = cfg.shareWindows;
+      }
     });
-
-    loadModels();
 
     return () => {
       unsubscribe?.();
@@ -322,13 +611,16 @@ export const Chat = () => {
   const isGenerating = status === "submitted" || status === "streaming";
   const isEmpty = messages.length === 0;
 
-  // Persist session when stream finishes
+  // Persist session when stream finishes (using ref to avoid double-write cycle)
   useEffect(() => {
     if (messages.length > 0 && status === "ready") {
       const firstUserMsg = messages.find((m) => m.role === "user");
       const title = firstUserMsg ? getMessageText(firstUserMsg).slice(0, 45) : "New Conversation";
-      const sessionId = currentSessionId || `session_${Date.now()}`;
-      if (!currentSessionId) setCurrentSessionId(sessionId);
+      const sessionId = sessionIdRef.current || `session_${Date.now()}`;
+      if (!sessionIdRef.current) {
+        sessionIdRef.current = sessionId;
+        setCurrentSessionId(sessionId);
+      }
 
       setSessions((prev) => {
         const existingIdx = prev.findIndex((s) => s.id === sessionId);
@@ -341,18 +633,15 @@ export const Chat = () => {
           persona,
         };
 
-        let nextSessions: ChatSession[];
-        if (existingIdx >= 0) {
-          nextSessions = [...prev];
-          nextSessions[existingIdx] = updatedSession;
-        } else {
-          nextSessions = [updatedSession, ...prev];
-        }
+        const nextSessions = existingIdx >= 0
+          ? prev.map((s, idx) => (idx === existingIdx ? updatedSession : s))
+          : [updatedSession, ...prev];
+
         saveStoredSessions(nextSessions);
         return nextSessions;
       });
     }
-  }, [messages, status, currentSessionId, model, persona]);
+  }, [messages, status, model, persona]);
 
   const handleSubmit = (message: PromptInputMessage) => {
     const hasText = Boolean(message.text?.trim());
@@ -495,33 +784,39 @@ export const Chat = () => {
 
   return (
     <div className="relative flex flex-col flex-1 p-3 min-h-0">
-      <HistoryDrawer
-        isOpen={isHistoryOpen}
-        onClose={() => setIsHistoryOpen(false)}
-        sessions={sessions}
-        currentSessionId={currentSessionId}
-        onSelectSession={handleSelectSession}
-        onDeleteSession={handleDeleteSession}
-        onNewChat={handleNewChat}
-      />
+      <Suspense fallback={null}>
+        {isHistoryOpen && (
+          <HistoryDrawer
+            isOpen={isHistoryOpen}
+            onClose={() => setIsHistoryOpen(false)}
+            sessions={sessions}
+            currentSessionId={currentSessionId}
+            onSelectSession={handleSelectSession}
+            onDeleteSession={handleDeleteSession}
+            onNewChat={handleNewChat}
+          />
+        )}
+      </Suspense>
 
       {/* Command confirmation dialog for terminal access */}
-      {pendingCommand && (
-        <CommandConfirmDialog
-          open={!!pendingCommand}
-          command={pendingCommand.command}
-          description={pendingCommand.description}
-          cwd={pendingCommand.cwd}
-          onAllow={() => {
-            pendingCommand.resolve(true);
-            setPendingCommand(null);
-          }}
-          onDeny={() => {
-            pendingCommand.resolve(false);
-            setPendingCommand(null);
-          }}
-        />
-      )}
+      <Suspense fallback={null}>
+        {pendingCommand && (
+          <CommandConfirmDialog
+            open={!!pendingCommand}
+            command={pendingCommand.command}
+            description={pendingCommand.description}
+            cwd={pendingCommand.cwd}
+            onAllow={() => {
+              pendingCommand.resolve(true);
+              setPendingCommand(null);
+            }}
+            onDeny={() => {
+              pendingCommand.resolve(false);
+              setPendingCommand(null);
+            }}
+          />
+        )}
+      </Suspense>
 
       {/* Top bar with model/persona selectors and actions */}
       <div className="flex items-center justify-between pb-2 border-b border-border/40 text-xs">
@@ -689,222 +984,17 @@ export const Chat = () => {
               </div>
             </ConversationEmptyState>
           ) : (
-            messages.map((message, messageIndex) => {
-              const messageText = getMessageText(message);
-              const isLastAssistant =
-                message.role === "assistant" && messageIndex === lastAssistantIndex;
-              const copyKey = `${message.id}-copy`;
-              const hasContent = message.parts.some(
-                (p) =>
-                  p.type === "text" ||
-                  p.type === "file" ||
-                  p.type === "source-url" ||
-                  p.type === "source-document" ||
-                  p.type === "reasoning" ||
-                  p.type === "dynamic-tool" ||
-                  p.type.startsWith("tool-"),
-              );
-
-              return (
-                <Fragment key={message.id}>
-                  <Message from={message.role}>
-                    <MessageContent>
-                      {message.parts.map((part, i) => {
-                        const key = `${message.id}-${i}`;
-                        switch (part.type) {
-                          case "text":
-                            return (
-                              <MessageResponse key={key}>
-                                {(part as { text: string }).text}
-                              </MessageResponse>
-                            );
-                          case "file": {
-                            const file = part as {
-                              url: string;
-                              mediaType?: string;
-                              filename?: string;
-                            };
-                            const isImage = file.mediaType?.startsWith("image/");
-                            if (isImage) {
-                              return (
-                                <img
-                                  key={key}
-                                  src={file.url}
-                                  alt={file.filename || "Attachment"}
-                                  className="max-h-48 max-w-full rounded-lg border object-contain"
-                                />
-                              );
-                            }
-                            return (
-                              <span key={key} className="text-xs text-muted-foreground">
-                                📎 {file.filename || file.mediaType || "Attachment"}
-                              </span>
-                            );
-                          }
-                          case "source-url": {
-                            const source = part as {
-                              url: string;
-                              title?: string;
-                            };
-                            return (
-                              <a
-                                key={key}
-                                href={source.url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-xs text-primary underline underline-offset-2"
-                              >
-                                {source.title || source.url}
-                              </a>
-                            );
-                          }
-                          case "source-document": {
-                            const doc = part as {
-                              title: string;
-                              filename?: string;
-                            };
-                            return (
-                              <span key={key} className="text-xs text-muted-foreground">
-                                📄 {doc.title || doc.filename || "Source"}
-                              </span>
-                            );
-                          }
-                          case "reasoning": {
-                            const reasoning = part as { text: string };
-                            if (!reasoning.text) return null;
-                            return (
-                              <details
-                                key={key}
-                                className="rounded-md bg-muted/50 px-2 py-1 text-xs text-muted-foreground"
-                              >
-                                <summary className="cursor-pointer font-medium">Reasoning</summary>
-                                <p className="mt-1 whitespace-pre-wrap">{reasoning.text}</p>
-                              </details>
-                            );
-                          }
-                          default: {
-                            if (part.type === "dynamic-tool" || part.type.startsWith("tool-")) {
-                              const p = part as unknown as {
-                                toolName?: string;
-                                toolCallId?: string;
-                                state?: string;
-                                input?: { command?: string; cwd?: string; description?: string };
-                                output?: { stdout?: string; stderr?: string; exitCode?: number };
-                                args?: { command?: string; cwd?: string; description?: string };
-                                result?: { stdout?: string; stderr?: string; exitCode?: number };
-                                errorText?: string;
-                              };
-                              const toolName =
-                                p.toolName ??
-                                (part.type === "dynamic-tool"
-                                  ? undefined
-                                  : part.type.replace(/^tool-/, ""));
-                              if (toolName !== "run_command") return null;
-
-                              const cmd = String(p.input?.command ?? p.args?.command ?? "");
-                              const cwd =
-                                (p.input?.cwd ?? p.args?.cwd)
-                                  ? String(p.input?.cwd ?? p.args?.cwd)
-                                  : undefined;
-                              const res = p.output ?? p.result;
-                              const isRunning =
-                                p.state === "input-streaming" ||
-                                p.state === "input-available" ||
-                                p.state === "call" ||
-                                p.state === "partial-call";
-
-                              return (
-                                <div
-                                  key={key}
-                                  className="my-1 rounded-md border border-border/50 bg-black/80 font-mono text-xs overflow-hidden"
-                                >
-                                  {/* Header */}
-                                  <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/30 bg-white/5">
-                                    <Terminal className="size-3 text-amber-400 shrink-0" />
-                                    <span className="text-amber-300/80 flex-1 truncate">{cmd}</span>
-                                    {isRunning && (
-                                      <Loader2Icon className="size-3 text-muted-foreground animate-spin shrink-0" />
-                                    )}
-                                    {!isRunning && res && (
-                                      <span
-                                        className={`text-[10px] shrink-0 ${
-                                          res.exitCode === 0 ? "text-green-500" : "text-red-400"
-                                        }`}
-                                      >
-                                        exit {res.exitCode}
-                                      </span>
-                                    )}
-                                  </div>
-                                  {/* CWD */}
-                                  {cwd && (
-                                    <div className="px-3 py-0.5 text-[10px] text-blue-400/60 border-b border-border/20">
-                                      in: {cwd}
-                                    </div>
-                                  )}
-                                  {/* Output */}
-                                  {isRunning && !res && (
-                                    <div className="px-3 py-2 text-muted-foreground/60 italic text-[11px]">
-                                      Running…
-                                    </div>
-                                  )}
-                                  {res?.stdout && (
-                                    <pre className="px-3 py-2 text-green-300 whitespace-pre-wrap break-all leading-relaxed max-h-64 overflow-y-auto">
-                                      {res.stdout}
-                                    </pre>
-                                  )}
-                                  {res?.stderr && (
-                                    <pre className="px-3 py-2 text-red-400 whitespace-pre-wrap break-all leading-relaxed border-t border-border/30 max-h-32 overflow-y-auto">
-                                      {res.stderr}
-                                    </pre>
-                                  )}
-                                  {p.errorText && (
-                                    <pre className="px-3 py-2 text-red-400 whitespace-pre-wrap break-all leading-relaxed border-t border-border/30 max-h-32 overflow-y-auto">
-                                      {p.errorText}
-                                    </pre>
-                                  )}
-                                </div>
-                              );
-                            }
-                            return null;
-                          }
-                        }
-                      })}
-                      {!hasContent && (
-                        <span className="text-xs text-muted-foreground italic">
-                          {status === "submitted" && messageIndex === messages.length - 1
-                            ? "Thinking…"
-                            : "Empty response"}
-                        </span>
-                      )}
-                    </MessageContent>
-                  </Message>
-                  {messageText && (
-                    <MessageActions>
-                      <MessageAction
-                        onClick={() => handleCopy(copyKey, messageText)}
-                        label="Copy"
-                        tooltip="Copy"
-                      >
-                        {copiedId === copyKey ? (
-                          <CheckIcon className="size-3 text-green-500" />
-                        ) : (
-                          <CopyIcon className="size-3" />
-                        )}
-                      </MessageAction>
-                      {isLastAssistant && status !== "streaming" && status !== "submitted" && (
-                        <MessageAction
-                          onClick={() => regenerate()}
-                          label="Retry"
-                          tooltip="Regenerate response"
-                        >
-                          <RefreshCcwIcon className="size-3" />
-                        </MessageAction>
-                      )}
-                    </MessageActions>
-                  )}
-                </Fragment>
-              );
-            })
+            messages.map((message, messageIndex) => (
+              <ChatMessageItem
+                key={message.id}
+                message={message}
+                isLastAssistant={message.role === "assistant" && messageIndex === lastAssistantIndex}
+                status={status}
+                copiedId={copiedId}
+                onCopy={handleCopy}
+                onRegenerate={regenerate}
+              />
+            ))
           )}
         </ConversationContent>
         <ConversationScrollButton />
@@ -952,9 +1042,17 @@ export const Chat = () => {
               <GlobeIcon size={15} />
               <span className="hidden sm:inline text-xs">Search</span>
             </PromptInputButton>
-            {window.nativeApi?.execCommand && (
+            {window.nativeApi?.supportsTerminal && (
               <PromptInputButton
-                onClick={() => setTerminalAccess(!terminalAccess)}
+                onClick={() => {
+                  const next = !terminalAccess;
+                  setTerminalAccess(next);
+                  if (next) {
+                    toast.warning(
+                      "Terminal access enabled. The AI model can run shell commands on your machine with your user permissions.",
+                    );
+                  }
+                }}
                 tooltip={{
                   content: terminalAccess
                     ? "Terminal access ON — model can run commands"

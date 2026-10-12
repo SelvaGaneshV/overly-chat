@@ -13,7 +13,7 @@
     "dev:web": "turbo -F web dev",
     "dev:server": "turbo -F server dev",
     "dev:desktop": "turbo -F desktop dev",
-    "dist:desktop": "turbo build && turbo -F desktop dist",
+    "desktop": "turbo build && turbo -F desktop dist",
     "generate:icons": "node scripts/generate-icons.mjs",
     "check": "oxlint && oxfmt --write"
   },

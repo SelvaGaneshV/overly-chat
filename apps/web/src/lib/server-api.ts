@@ -85,3 +85,39 @@ export async function serverFetch(input: RequestInfo | URL, init?: RequestInit):
     headers,
   });
 }
+
+export interface AvailableModel {
+  id: string;
+  name: string;
+  context_length?: number;
+  description?: string;
+}
+
+export async function fetchModels(): Promise<AvailableModel[]> {
+  try {
+    const res = await serverFetch("/models");
+    if (!res.ok) return [];
+    const data = (await res.json()) as { models?: AvailableModel[] };
+    return Array.isArray(data?.models) ? data.models : [];
+  } catch (err) {
+    console.warn("fetchModels failed:", err);
+    return [];
+  }
+}
+
+export interface PersonaInfo {
+  id: string;
+  name: string;
+}
+
+export async function fetchPersonas(): Promise<PersonaInfo[]> {
+  try {
+    const res = await serverFetch("/personas");
+    if (!res.ok) return [];
+    const data = (await res.json()) as { personas?: PersonaInfo[] };
+    return Array.isArray(data?.personas) ? data.personas : [];
+  } catch (err) {
+    console.warn("fetchPersonas failed:", err);
+    return [];
+  }
+}

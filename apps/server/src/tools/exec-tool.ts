@@ -2,7 +2,32 @@ import { tool, type Tool } from "ai";
 import { exec } from "node:child_process";
 import fsSync from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { z } from "zod";
+
+const DANGEROUS_COMMAND_PATTERNS = [
+  /\bformat\s+[a-z]:/i,
+  /\bdel\s+(?:\/[a-z]\s+)*[a-z]:\\/i,
+  /\brmdir\s+\/[sS]\s+\/[qQ]\s+[a-z]:\\/i,
+  /\brm\s+-rf?\s+(\/|[a-z]:\\|\*)/i,
+  /\b(shutdown|reboot|poweroff|init\s+0)\b/i,
+  /\bmkfs\b/i,
+  /\bdd\s+if=/i,
+  /:(){ :\|:& };:/,
+  /\b(curl|wget)\s+[^|]+\|\s*(sh|bash|powershell|cmd)\b/i,
+  /Invoke-Expression\s*\(?.*(Invoke-WebRequest|iwr|curl|wget)/i,
+];
+
+const isUncOrRemotePath = (p?: string): boolean => {
+  if (!p) return false;
+  const trimmed = p.trim();
+  return (
+    trimmed.startsWith("\\\\") ||
+    trimmed.startsWith("//") ||
+    trimmed.startsWith("\\??\\") ||
+    /^[a-zA-Z]+:\/\//.test(trimmed)
+  );
+};
 
 const execParams = z.object({
   command: z
@@ -27,7 +52,53 @@ export const execTool: Tool = tool({
     "Always explain what command you are running and why before calling this tool.",
   inputSchema: execParams,
   execute: async ({ command, cwd }: { command: string; cwd?: string; description?: string }) => {
-    const resolvedCwd = cwd && fsSync.existsSync(cwd) ? cwd : os.homedir();
+    // 1. Guard against UNC paths to prevent Windows NetNTLM hash harvesting
+    if (isUncOrRemotePath(cwd)) {
+      return {
+        stdout: "",
+        stderr: "Execution blocked: UNC network paths are not permitted as working directories.",
+        exitCode: 1,
+      };
+    }
+
+    if (
+      /(\\\\[a-zA-Z0-9_.-]+\\[a-zA-Z0-9_$.-]+|\/\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_$.-]+)/.test(command)
+    ) {
+      return {
+        stdout: "",
+        stderr: "Execution blocked: UNC network paths are not permitted in commands.",
+        exitCode: 1,
+      };
+    }
+
+    // 2. Guard against catastrophic destructive commands
+    for (const pattern of DANGEROUS_COMMAND_PATTERNS) {
+      if (pattern.test(command)) {
+        return {
+          stdout: "",
+          stderr: "Execution blocked: command matched high-risk safety guardrail pattern.",
+          exitCode: 1,
+        };
+      }
+    }
+
+    // 3. Resolve and validate working directory
+    let resolvedCwd = os.homedir();
+    if (cwd) {
+      try {
+        const normalized = path.resolve(cwd);
+        if (
+          !isUncOrRemotePath(normalized) &&
+          fsSync.existsSync(normalized) &&
+          fsSync.statSync(normalized).isDirectory()
+        ) {
+          resolvedCwd = normalized;
+        }
+      } catch {
+        // Fall back to home directory on any resolution error
+      }
+    }
+
     return new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
       const proc = exec(
         command,

@@ -6,6 +6,7 @@ export interface ChatConfig {
   instructions: string;
   persona?: string;
   workingDir?: string;
+  shareWindows?: boolean;
 }
 
 export interface WindowConfig {
@@ -54,14 +55,11 @@ contextBridge.exposeInMainWorld("nativeApi", {
   closeWindow: () => ipcRenderer.send("close-window"),
   setGhostMode: (enabled: boolean) => ipcRenderer.send("set-ghost-mode", enabled),
   captureScreen: (): Promise<string | null> => ipcRenderer.invoke("capture-screen"),
-  getOpenWindows: (): Promise<OpenWindowInfo[]> => ipcRenderer.invoke("get-open-windows"),
+  getOpenWindows: (opts?: { thumbnails?: boolean }): Promise<OpenWindowInfo[]> =>
+    ipcRenderer.invoke("get-open-windows", opts),
   captureWindow: (windowId: string): Promise<string | null> =>
     ipcRenderer.invoke("capture-window", windowId),
-  execCommand: (opts: {
-    command: string;
-    cwd?: string;
-  }): Promise<{ stdout: string; stderr: string; exitCode: number }> =>
-    ipcRenderer.invoke("exec-command", opts),
+  supportsTerminal: true,
   onGhostModeChange: (callback: (enabled: boolean) => void) => {
     const handler = (_: unknown, enabled: boolean) => callback(enabled);
     ipcRenderer.on("ghost-mode-changed", handler);

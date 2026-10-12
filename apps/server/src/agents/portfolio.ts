@@ -106,10 +106,21 @@ export interface AgentOptions {
   workingDir?: string;
 }
 
+const openRouterClients = new Map<string, ReturnType<typeof createOpenRouter>>();
+
+export const getOpenRouterClient = (apiKey: string) => {
+  let client = openRouterClients.get(apiKey);
+  if (!client) {
+    client = createOpenRouter({ apiKey });
+    openRouterClients.set(apiKey, client);
+  }
+  return client;
+};
+
 export const createCopilotAgent = (opts?: AgentOptions): ToolLoopAgent<never, any> => {
   const config = resolveConfig(opts?.apiKey);
   const apiKey = opts?.apiKey || config.apiKey;
-  const openrouter = createOpenRouter({ apiKey });
+  const openrouter = getOpenRouterClient(apiKey);
   const selectedModel = opts?.model || config.model || "openrouter/free";
   const personaKey = opts?.persona || config.persona || "general";
   const personaPrompt =
@@ -121,11 +132,12 @@ export const createCopilotAgent = (opts?: AgentOptions): ToolLoopAgent<never, an
     ? `\n\nWeb search is enabled for this conversation. Ground your answers in current information when relevant and include source URLs inline as markdown links. If you are unsure about recency, say so.`
     : "";
 
+  const windowsList = opts?.openWindows?.slice(0, 15) ?? [];
   const windowsInstructions =
-    opts?.openWindows && opts.openWindows.length > 0
+    windowsList.length > 0
       ? `\n\nActive Windows on User's Desktop:
 The user currently has these application windows open:
-${opts.openWindows.map((w, i) => `${i + 1}. "${w.name}"`).join("\n")}
+${windowsList.map((w, i) => `${i + 1}. "${w.name}"`).join("\n")}
 You have direct awareness of the user's open windows. When the user asks what windows they have open, or refers to their code, editor, browser, terminal, or any open app, answer with direct knowledge of these active windows.`
       : "";
 

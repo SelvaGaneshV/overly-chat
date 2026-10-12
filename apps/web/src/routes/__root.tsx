@@ -1,9 +1,21 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@overly-chat/ui/components/sonner";
 import { HeadContent, Outlet, createRootRouteWithContext } from "@tanstack/react-router";
 
 import { ThemeProvider } from "@/components/theme-provider";
 
 import "../index.css";
+
+export const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 1000 * 60 * 5, // 5 minutes
+      gcTime: 1000 * 60 * 30, // 30 minutes
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+});
 
 export interface RouterAppContext {}
 
@@ -30,7 +42,7 @@ export const Route = createRootRouteWithContext<RouterAppContext>()({
 
 function RootComponent() {
   return (
-    <>
+    <QueryClientProvider client={queryClient}>
       <HeadContent />
       <ThemeProvider
         attribute="class"
@@ -42,6 +54,6 @@ function RootComponent() {
 
         <Toaster richColors />
       </ThemeProvider>
-    </>
+    </QueryClientProvider>
   );
 }

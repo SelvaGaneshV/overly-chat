@@ -2,7 +2,7 @@ packages:
   - apps/*
   - packages/*
 allowBuilds:
-  electron: set this to true or false
+  electron: false
   electron-winstaller: false
   esbuild: true
   msw: true
