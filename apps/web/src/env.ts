@@ -36,7 +36,9 @@ export interface OpenWindowInfo {
 
 declare global {
   interface Window {
+    isElectron?: boolean;
     nativeApi?: {
+      isElectron?: boolean;
       platform: string;
       snapWindow?: (position: WindowSnapPosition) => void;
       resizeChatWindow: (size: { width: number; height: number }) => void;
@@ -61,6 +63,14 @@ declare global {
   }
 }
 
-export const isElectron =
-  typeof window !== "undefined" &&
-  (window.desktopBridge !== undefined || window.nativeApi !== undefined);
+export const checkIsElectron = (): boolean => {
+  if (typeof window === "undefined") return false;
+  return Boolean(
+    window.isElectron ||
+    window.nativeApi !== undefined ||
+    window.desktopBridge !== undefined ||
+    (typeof navigator !== "undefined" && /Electron/i.test(navigator.userAgent)),
+  );
+};
+
+export const isElectron = checkIsElectron();

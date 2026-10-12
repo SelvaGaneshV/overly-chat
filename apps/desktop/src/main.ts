@@ -64,7 +64,7 @@ const readConfig = async (): Promise<Record<string, string>> => {
 };
 
 const writeConfig = async (data: Record<string, string>) => {
-  cachedConfig = { ...(cachedConfig ?? {}), ...data };
+  cachedConfig = { ...cachedConfig, ...data };
   const toSave = { ...cachedConfig };
   if (toSave.apiKey && safeStorage.isEncryptionAvailable()) {
     try {
@@ -371,7 +371,13 @@ const createWindow = async () => {
     hasShadow: false,
     icon: appIcon,
     webPreferences: {
-      preload: path.join(__dirname, "preload.cjs"),
+      preload: (() => {
+        const p = path.join(__dirname, "preload.cjs");
+        if (!fsSync.existsSync(p)) {
+          console.error(`[preload] CRITICAL: Preload script not found at ${p}`);
+        }
+        return p;
+      })(),
       contextIsolation: true,
       nodeIntegration: false,
     },
@@ -438,16 +444,30 @@ const createWindow = async () => {
       const cursor = screen.getCursorScreenPoint();
       const display = screen.getDisplayNearestPoint(cursor);
       const { width: dw, height: dh } = display.size;
+      const scale = display.scaleFactor || 1;
+      const targetW = Math.max(800, Math.min(1920, Math.round((dw || 1920) * scale)));
+      const targetH = Math.max(600, Math.min(1080, Math.round((dh || 1080) * scale)));
       const sources = await desktopCapturer.getSources({
         types: ["screen"],
         thumbnailSize: {
-          width: Math.min(1920, Math.round(dw * display.scaleFactor)),
-          height: Math.min(1080, Math.round(dh * display.scaleFactor)),
+          width: targetW,
+          height: targetH,
         },
       });
       if (!sources || sources.length === 0) return null;
-      const match = sources.find((s) => s.display_id === String(display.id)) ?? sources[0];
-      if (match.thumbnail.isEmpty()) return null;
+      let match = sources.find((s) => s.display_id === String(display.id));
+      if (!match || match.thumbnail.isEmpty()) {
+        match = sources.find((s) => !s.thumbnail.isEmpty()) ?? sources[0];
+      }
+      if (!match || match.thumbnail.isEmpty()) {
+        // Fallback retry with standard size if first attempt thumbnail is empty
+        const retrySources = await desktopCapturer.getSources({
+          types: ["screen"],
+          thumbnailSize: { width: 1280, height: 720 },
+        });
+        match = retrySources?.find((s) => !s.thumbnail.isEmpty()) ?? null;
+      }
+      if (!match || match.thumbnail.isEmpty()) return null;
 
       // Downscale to max 1440px and compress to JPEG for 95% smaller IPC and AI vision payload
       const originalSize = match.thumbnail.getSize();
@@ -463,7 +483,11 @@ const createWindow = async () => {
           targetHeight = MAX_DIM;
         }
       }
-      const resized = match.thumbnail.resize({ width: targetWidth, height: targetHeight, quality: "better" });
+      const resized = match.thumbnail.resize({
+        width: targetWidth,
+        height: targetHeight,
+        quality: "better",
+      });
       const jpegBuffer = resized.toJPEG(82);
       return `data:image/jpeg;base64,${jpegBuffer.toString("base64")}`;
     } catch (err) {
@@ -733,8 +757,21 @@ const createWindow = async () => {
     persistBounds(nextBounds);
   });
 
+  const isAllowedDevUrl = (targetUrl: string) => {
+    try {
+      const parsed = new URL(targetUrl);
+      const devParsed = new URL(DEV_SERVER_URL);
+      return (
+        (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") &&
+        parsed.port === devParsed.port
+      );
+    } catch {
+      return false;
+    }
+  };
+
   mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (isDev && (url === DEV_SERVER_URL || url.startsWith(`${DEV_SERVER_URL}/`))) {
+    if (isDev && isAllowedDevUrl(url)) {
       return;
     }
     if (!isDev && url.startsWith("file://")) {

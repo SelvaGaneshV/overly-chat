@@ -12,6 +12,9 @@ export default defineConfig({
   resolve: {
     tsconfigPaths: true,
   },
+  build: {
+    emptyOutDir: true,
+  },
 
   plugins: [
     tailwindcss(),

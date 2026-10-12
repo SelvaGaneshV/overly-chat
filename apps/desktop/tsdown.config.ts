@@ -2,15 +2,10 @@ import { defineConfig } from "tsdown";
 
 export default defineConfig([
   {
-    entry: { main: "src/main.ts" },
-    format: "cjs",
-    outDir: "dist",
-    external: ["electron"],
-    platform: "node",
-    clean: true,
-  },
-  {
-    entry: { preload: "src/preload.ts" },
+    entry: {
+      main: "src/main.ts",
+      preload: "src/preload.ts",
+    },
     format: "cjs",
     outDir: "dist",
     external: ["electron"],

@@ -127,17 +127,27 @@ function SettingsComponent() {
   });
 
   useEffect(() => {
-    window.nativeApi?.getConfig().then((config) => {
-      form.setFieldValue("apiKey", config.apiKey);
-      form.setFieldValue("model", config.model || "openrouter/free");
-      form.setFieldValue("instructions", config.instructions);
-      form.setFieldValue("persona", config.persona || "general");
-      form.setFieldValue("alwaysOnTop", config.alwaysOnTop);
-      form.setFieldValue("opacity", config.opacity ?? 0.96);
-      form.setFieldValue("workingDir", config.workingDir ?? "");
-      form.setFieldValue("shareWindows", config.shareWindows ?? false);
+    if (window.nativeApi?.getConfig) {
+      window.nativeApi
+        .getConfig()
+        .then((config) => {
+          form.setFieldValue("apiKey", config.apiKey);
+          form.setFieldValue("model", config.model || "openrouter/free");
+          form.setFieldValue("instructions", config.instructions);
+          form.setFieldValue("persona", config.persona || "general");
+          form.setFieldValue("alwaysOnTop", config.alwaysOnTop);
+          form.setFieldValue("opacity", config.opacity ?? 0.96);
+          form.setFieldValue("workingDir", config.workingDir ?? "");
+          form.setFieldValue("shareWindows", config.shareWindows ?? false);
+          setLoading(false);
+        })
+        .catch((err) => {
+          console.error("Failed to load config from nativeApi:", err);
+          setLoading(false);
+        });
+    } else {
       setLoading(false);
-    });
+    }
   }, []);
 
   useEffect(() => {

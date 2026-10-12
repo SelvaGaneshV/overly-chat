@@ -1,5 +1,4 @@
 import { Button } from "@overly-chat/ui/components/button";
-import type { UIMessage } from "ai";
 import { MessageSquare, Plus, Trash2, X } from "lucide-react";
 
 import type { ChatSession } from "./session-storage";
@@ -10,7 +9,6 @@ export {
   sanitizeMessagesForStorage,
   saveStoredSessions,
 } from "./session-storage";
-
 
 export function HistoryDrawer({
   isOpen,

@@ -41,7 +41,11 @@ export interface OpenWindowInfo {
   appIcon?: string;
 }
 
+contextBridge.exposeInMainWorld("isElectron", true);
+contextBridge.exposeInMainWorld("desktopBridge", true);
+
 contextBridge.exposeInMainWorld("nativeApi", {
+  isElectron: true,
   platform: process.platform,
   snapWindow: (position: WindowSnapPosition) => ipcRenderer.send("snap-window", position),
   resizeChatWindow: (size: ChatWindowSize) => ipcRenderer.send("resize-chat-window", size),

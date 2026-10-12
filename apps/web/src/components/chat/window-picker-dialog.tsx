@@ -11,6 +11,8 @@ import { Spinner } from "@overly-chat/ui/components/spinner";
 import { AppWindow, RotateCw } from "lucide-react";
 import { toast } from "sonner";
 import type { OpenWindowInfo } from "@/env";
+import { isElectron } from "@/env";
+import { dataUrlToFile } from "@/lib/file-utils";
 
 interface WindowPickerDialogProps {
   open: boolean;
@@ -25,7 +27,11 @@ export function WindowPickerDialog({ open, onOpenChange, onAttach }: WindowPicke
 
   const fetchWindows = async () => {
     if (!window.nativeApi?.getOpenWindows) {
-      toast.info("Window capture is available in the desktop app");
+      if (isElectron) {
+        toast.error("Window detection service not ready. Please try again.");
+      } else {
+        toast.info("Window capture is available in the desktop app");
+      }
       return;
     }
     try {
@@ -57,12 +63,8 @@ export function WindowPickerDialog({ open, onOpenChange, onAttach }: WindowPicke
         dataUrl = win.thumbnail;
       }
       if (dataUrl) {
-        const res = await fetch(dataUrl);
-        const blob = await res.blob();
         const safeName = win.name.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 30);
-        const file = new File([blob], `window-${safeName}-${Date.now()}.png`, {
-          type: "image/png",
-        });
+        const file = dataUrlToFile(dataUrl, `window-${safeName}-${Date.now()}.png`);
         onAttach?.(file);
         toast.success(`Attached "${win.name.slice(0, 40)}" to message`);
         onOpenChange(false);
@@ -105,10 +107,19 @@ export function WindowPickerDialog({ open, onOpenChange, onAttach }: WindowPicke
         {!window.nativeApi?.getOpenWindows ? (
           <div className="flex h-36 flex-col items-center justify-center gap-1.5 text-center text-muted-foreground">
             <AppWindow className="size-8 opacity-40" />
-            <span className="text-xs font-medium">Desktop app required</span>
-            <span className="text-[11px] opacity-75">
-              Window detection is only available in the Overly Chat desktop app.
+            <span className="text-xs font-medium">
+              {isElectron ? "Window detection initializing…" : "Desktop app required"}
             </span>
+            <span className="text-[11px] opacity-75">
+              {isElectron
+                ? "Connecting to desktop window detector service."
+                : "Window detection is only available in the Overly Chat desktop app."}
+            </span>
+            {isElectron && (
+              <Button variant="outline" size="xs" onClick={fetchWindows} className="mt-2 text-xs">
+                Retry
+              </Button>
+            )}
           </div>
         ) : loading && windows.length === 0 ? (
           <div className="flex h-44 flex-col items-center justify-center gap-2 text-muted-foreground">

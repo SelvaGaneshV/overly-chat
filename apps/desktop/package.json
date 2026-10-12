@@ -1,8 +1,8 @@
 {
   "name": "desktop",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "private": true,
-  "description": "My Electron application description",
+  "description": "Overly for you",
   "keywords": [],
   "license": "MIT",
   "author": {
@@ -13,36 +13,40 @@
   "scripts": {
     "dev": "tsdown && concurrently -n tsdown,electron -c blue,magenta \"tsdown --watch\" \"electron .\"",
     "build": "tsdown",
-    "dist": "node -e \"require('fs').cpSync('../web/dist','dist/renderer',{recursive:true})\" && electron-builder",
+    "dist": "node -e \"require('fs').rmSync('dist/renderer',{recursive:true,force:true}); require('fs').cpSync('../web/dist','dist/renderer',{recursive:true})\" && electron-builder",
     "start": "electron .",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
+  "devDependencies": {
     "@hono/node-server": "^2.1.4",
     "@openrouter/ai-sdk-provider": "^3.1.0",
-    "ai": "^7.0.136",
-    "hono": "^4.13.13"
-  },
-  "devDependencies": {
     "@types/node": "catalog:",
+    "ai": "^7.0.136",
     "concurrently": "^10.0.6",
     "electron": "^44.7.0",
     "electron-builder": "^26.15.3",
+    "hono": "^4.13.13",
     "tsdown": "catalog:",
     "typescript": "catalog:"
   },
   "build": {
     "appId": "com.overlychat.app",
     "productName": "Overly Chat",
+    "compression": "maximum",
     "directories": {
       "output": "release"
     },
     "files": [
-      "dist/**/*"
+      "dist/**/*",
+      "assets/icons/png/256x256.png"
     ],
     "win": {
       "target": "nsis",
       "icon": "assets/icons/win/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     },
     "mac": {
       "target": "dmg",

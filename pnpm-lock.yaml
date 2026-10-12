@@ -74,23 +74,19 @@ importers:
         version: 7.0.2
 
   apps/desktop:
-    dependencies:
+    devDependencies:
       '@hono/node-server':
         specifier: ^2.1.4
         version: 2.1.4(hono@4.13.13)
       '@openrouter/ai-sdk-provider':
         specifier: ^3.1.0
         version: 3.1.0(ai@7.0.136(zod@4.6.5))(zod@4.6.5)
-      ai:
-        specifier: ^7.0.136
-        version: 7.0.136(zod@4.6.5)
-      hono:
-        specifier: ^4.13.13
-        version: 4.13.13
-    devDependencies:
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.4
+      ai:
+        specifier: ^7.0.136
+        version: 7.0.136(zod@4.6.5)
       concurrently:
         specifier: ^10.0.6
         version: 10.0.6
@@ -100,6 +96,9 @@ importers:
       electron-builder:
         specifier: ^26.15.3
         version: 26.15.3(electron-builder-squirrel-windows@26.15.3)
+      hono:
+        specifier: ^4.13.13
+        version: 4.13.13
       tsdown:
         specifier: 'catalog:'
         version: 0.23.0(tsx@4.23.15)(typescript@7.0.2)

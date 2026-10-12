@@ -20,7 +20,17 @@ import {
   Terminal,
   XIcon,
 } from "lucide-react";
-import { Fragment, lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  lazy,
+  memo,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { toast } from "sonner";
 import {
   DropdownMenu,
@@ -29,7 +39,9 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@overly-chat/ui/components/dropdown-menu";
-import { fetchModels, serverFetch, type AvailableModel } from "../../lib/server-api";
+import { fetchModels, serverFetch } from "../../lib/server-api";
+import { isElectron } from "@/env";
+import { dataUrlToFile } from "@/lib/file-utils";
 
 const CommandConfirmDialog = lazy(() =>
   import("./command-confirm-dialog").then((m) => ({ default: m.CommandConfirmDialog })),
@@ -77,11 +89,7 @@ import {
   PromptInputTools,
   usePromptInputAttachments,
 } from "../ai-elements/prompt-input";
-import {
-  type ChatSession,
-  getStoredSessions,
-  saveStoredSessions,
-} from "./session-storage";
+import { type ChatSession, getStoredSessions, saveStoredSessions } from "./session-storage";
 
 const SUGGESTIONS = [
   {
@@ -149,20 +157,27 @@ const ScreenSnipAction = () => {
         setCapturing(true);
         const dataUrl = await window.nativeApi.captureScreen();
         if (dataUrl) {
-          const res = await fetch(dataUrl);
-          const blob = await res.blob();
-          const file = new File([blob], `screen-${Date.now()}.png`, { type: "image/png" });
+          const file = dataUrlToFile(dataUrl, `screen-${Date.now()}.png`);
           attachments.add([file]);
           toast.success("Desktop screenshot captured");
+          return;
+        } else {
+          toast.error("Failed to capture desktop screenshot. Please try again.");
           return;
         }
       } catch (err) {
         console.error("Screen capture failed:", err);
+        toast.error("Screen capture failed. Please try again.");
+        return;
       } finally {
         setCapturing(false);
       }
     }
-    toast.info("Native screen capture available in Electron app");
+    if (isElectron) {
+      toast.error("Screen capture service not ready. Please try again.");
+    } else {
+      toast.info("Native screen capture available in Electron app");
+    }
   };
 
   return (
@@ -245,9 +260,7 @@ const ChatMessageItem = memo(
               switch (part.type) {
                 case "text":
                   return (
-                    <MessageResponse key={key}>
-                      {(part as { text: string }).text}
-                    </MessageResponse>
+                    <MessageResponse key={key}>{(part as { text: string }).text}</MessageResponse>
                   );
                 case "file": {
                   const file = part as {
@@ -327,9 +340,7 @@ const ChatMessageItem = memo(
                     };
                     const toolName =
                       p.toolName ??
-                      (part.type === "dynamic-tool"
-                        ? undefined
-                        : part.type.replace(/^tool-/, ""));
+                      (part.type === "dynamic-tool" ? undefined : part.type.replace(/^tool-/, ""));
                     if (toolName !== "run_command") return null;
 
                     const cmd = String(p.input?.command ?? p.args?.command ?? "");
@@ -402,20 +413,14 @@ const ChatMessageItem = memo(
             })}
             {!hasContent && (
               <span className="text-xs text-muted-foreground italic">
-                {status === "submitted" && isLastAssistant
-                  ? "Thinking…"
-                  : "Empty response"}
+                {status === "submitted" && isLastAssistant ? "Thinking…" : "Empty response"}
               </span>
             )}
           </MessageContent>
         </Message>
         {messageText && (
           <MessageActions>
-            <MessageAction
-              onClick={() => onCopy(copyKey, messageText)}
-              label="Copy"
-              tooltip="Copy"
-            >
+            <MessageAction onClick={() => onCopy(copyKey, messageText)} label="Copy" tooltip="Copy">
               {copiedId === copyKey ? (
                 <CheckIcon className="size-3 text-green-500" />
               ) : (
@@ -423,11 +428,7 @@ const ChatMessageItem = memo(
               )}
             </MessageAction>
             {isLastAssistant && status !== "streaming" && status !== "submitted" && (
-              <MessageAction
-                onClick={onRegenerate}
-                label="Retry"
-                tooltip="Regenerate response"
-              >
+              <MessageAction onClick={onRegenerate} label="Retry" tooltip="Regenerate response">
                 <RefreshCcwIcon className="size-3" />
               </MessageAction>
             )}
@@ -633,9 +634,10 @@ export const Chat = () => {
           persona,
         };
 
-        const nextSessions = existingIdx >= 0
-          ? prev.map((s, idx) => (idx === existingIdx ? updatedSession : s))
-          : [updatedSession, ...prev];
+        const nextSessions =
+          existingIdx >= 0
+            ? prev.map((s, idx) => (idx === existingIdx ? updatedSession : s))
+            : [updatedSession, ...prev];
 
         saveStoredSessions(nextSessions);
         return nextSessions;
@@ -988,7 +990,9 @@ export const Chat = () => {
               <ChatMessageItem
                 key={message.id}
                 message={message}
-                isLastAssistant={message.role === "assistant" && messageIndex === lastAssistantIndex}
+                isLastAssistant={
+                  message.role === "assistant" && messageIndex === lastAssistantIndex
+                }
                 status={status}
                 copiedId={copiedId}
                 onCopy={handleCopy}
