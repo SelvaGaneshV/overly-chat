@@ -15,7 +15,7 @@ Most AI tools make you switch tabs or share your screen to get help. Overly sits
 - **Always on top, never in the way.** Overly floats above your windows. Collapse it to a small bubble and bring it back instantly when you need it.
 - **Invisible on screen shares.** It stays hidden from the taskbar and does not show up in Teams, Meet, OBS, or screen recordings.
 - **Ask about what you see.** Take a screenshot of your screen or a single window and ask Overly to explain it, summarize it, or help you reply to it.
-- **Four assistants in one.** Switch between General Copilot, Coding Copilot, Meeting Whisperer, and Portfolio Mode, or add your own instructions to change how it responds.
+- **Three assistants in one.** Switch between General Copilot, Coding Copilot, and Meeting Whisperer, or add your own instructions to change how it responds.
 - **Bring your own model.** Connect your OpenRouter key once, then pick from available free models or enter any model ID you prefer.
 - **Live web answers.** Turn on Search when you want current information, with sources included in the answer.
 - **Hands-on help for developers.** Overly can run terminal commands for you, with your permission, to check files, run builds and tests, or look at git status.
