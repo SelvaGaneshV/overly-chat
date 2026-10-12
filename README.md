@@ -1,6 +1,10 @@
-# Overly
+<p align="center">
+  <img src="apps/desktop/assets/overly.png" alt="Overly app icon" width="96" />
+</p>
 
-Overly is a transparent AI assistant that floats above your desktop. It stays on top while you work, stays invisible on screen shares, and disappears into a small bubble when you need space.
+<h1 align="center">Overly</h1>
+
+<p align="center">A transparent AI assistant that floats above your desktop. It stays on top while you work, stays invisible on screen shares, and disappears into a small bubble when you need space.</p>
 
 ## Why Overly
 
