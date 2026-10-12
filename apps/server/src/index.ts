@@ -4,7 +4,21 @@ import { createAgentUIStreamResponse, type UIMessage } from "ai";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import { createCopilotAgent, PERSONAS, resolveConfig } from "./agents/portfolio";
+import { createCopilotAgent, PERSONAS, resolveConfig, setInMemoryConfig } from "./agents/portfolio";
+
+// Listen for in-memory config updates over Node.js IPC pipe (when forked by Electron)
+if (typeof process.on === "function") {
+  process.on("message", (msg: unknown) => {
+    if (msg && typeof msg === "object" && (msg as { type?: string }).type === "SET_CONFIG") {
+      const cfg = (msg as { config?: Record<string, string> }).config;
+      if (cfg) {
+        setInMemoryConfig(cfg);
+        cachedFreeModels = null;
+        lastModelsFetch = 0;
+      }
+    }
+  });
+}
 
 const app = new Hono();
 
@@ -14,8 +28,41 @@ app.use(
   cors({
     origin: env.CORS_ORIGIN ?? "*",
     allowMethods: ["GET", "POST", "OPTIONS"],
+    allowHeaders: ["Content-Type", "Authorization", "x-overly-token"],
   }),
 );
+
+// Require session token authentication if configured
+const sessionToken = process.env.OVERLY_SESSION_TOKEN || env.OVERLY_SESSION_TOKEN;
+if (sessionToken) {
+  app.use("/*", async (c, next) => {
+    if (c.req.method === "OPTIONS" || c.req.path === "/health") {
+      return next();
+    }
+    const auth = c.req.header("Authorization");
+    const token = auth?.startsWith("Bearer ") ? auth.slice(7) : c.req.header("x-overly-token");
+    if (token !== sessionToken) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+    return next();
+  });
+}
+
+// In-memory config sync endpoint for standalone dev server
+app.post("/internal/config", async (c) => {
+  try {
+    const body = await c.req.json();
+    if (body && typeof body === "object") {
+      setInMemoryConfig(body);
+      cachedFreeModels = null;
+      lastModelsFetch = 0;
+      return c.json({ ok: true });
+    }
+    return c.json({ error: "Invalid config object" }, 400);
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+});
 
 app.get("/health", (c) => c.json({ ok: true }));
 
@@ -115,12 +162,16 @@ app.post("/chat", async (c) => {
     persona?: string;
     instructions?: string;
     openWindows?: Array<{ id: string; name: string }>;
+    terminalAccess?: boolean;
+    workingDir?: string;
     body?: {
       webSearch?: boolean;
       model?: string;
       persona?: string;
       instructions?: string;
       openWindows?: Array<{ id: string; name: string }>;
+      terminalAccess?: boolean;
+      workingDir?: string;
     };
   };
 
@@ -130,6 +181,8 @@ app.post("/chat", async (c) => {
   const persona = parsed.persona ?? parsed.body?.persona;
   const instructions = parsed.instructions ?? parsed.body?.instructions;
   const openWindows = parsed.openWindows ?? parsed.body?.openWindows;
+  const terminalAccess = parsed.terminalAccess ?? parsed.body?.terminalAccess ?? false;
+  const workingDir = parsed.workingDir ?? parsed.body?.workingDir;
 
   if (!Array.isArray(messages)) {
     return c.json({ error: "`messages` must be an array" }, 400);
@@ -143,6 +196,8 @@ app.post("/chat", async (c) => {
         persona,
         instructions,
         openWindows,
+        terminalAccess,
+        workingDir,
       }),
       uiMessages: messages,
     });
@@ -153,12 +208,20 @@ app.post("/chat", async (c) => {
   }
 });
 
+const serverPort = process.env.PORT !== undefined ? Number(process.env.PORT) : env.PORT;
+const serverHost = process.env.HOST || env.HOST || "127.0.0.1";
+
 serve(
   {
     fetch: app.fetch,
-    port: 3000,
+    port: serverPort,
+    hostname: serverHost,
   },
   (info) => {
-    console.log(`Server is running on http://localhost:${info.port}`);
+    console.log(`Server is running on http://${info.address}:${info.port}`);
+    if (typeof process.send === "function") {
+      process.send({ type: "ready", port: info.port });
+      process.send("ready");
+    }
   },
 );

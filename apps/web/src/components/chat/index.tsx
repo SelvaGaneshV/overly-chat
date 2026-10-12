@@ -5,19 +5,31 @@ import {
   AppWindow,
   Camera,
   CheckIcon,
+  ChevronDown,
   ClipboardPaste,
   CopyIcon,
   DownloadIcon,
   GlobeIcon,
   History,
+  Loader2Icon,
   PenLineIcon,
   RefreshCcwIcon,
   SparklesIcon,
   SquarePenIcon,
+  Terminal,
   XIcon,
 } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@overly-chat/ui/components/dropdown-menu";
+import { serverFetch } from "../../lib/server-api";
+import { CommandConfirmDialog } from "./command-confirm-dialog";
 import { WindowPickerDialog } from "./window-picker-dialog";
 import {
   Attachment,
@@ -192,6 +204,7 @@ export const Chat = () => {
   const [text, setText] = useState<string>("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [useWebSearch, setUseWebSearch] = useState<boolean>(false);
+  const [terminalAccess, setTerminalAccess] = useState<boolean>(false);
   const [model, setModel] = useState<string>("openrouter/free");
   const [persona, setPersona] = useState<string>("general");
   const [modelsList, setModelsList] = useState<AvailableModel[]>([]);
@@ -199,6 +212,15 @@ export const Chat = () => {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const openWindowsRef = useRef<Array<{ id: string; name: string }>>([]);
+  const workingDirRef = useRef<string>("");
+
+  // Pending terminal command waiting for user confirmation
+  const [pendingCommand, setPendingCommand] = useState<{
+    command: string;
+    description?: string;
+    cwd?: string;
+    resolve: (allowed: boolean) => void;
+  } | null>(null);
 
   // Periodically refresh open windows list so model is continuously aware
   useEffect(() => {
@@ -220,7 +242,7 @@ export const Chat = () => {
     setSessions(getStoredSessions());
 
     const loadModels = () => {
-      fetch(`${import.meta.env.VITE_SERVER_URL}/models`)
+      serverFetch("/models")
         .then((res) => res.json())
         .then((data) => {
           if (Array.isArray(data?.models) && data.models.length > 0) {
@@ -239,10 +261,26 @@ export const Chat = () => {
     window.nativeApi?.getConfig().then((cfg) => {
       if (cfg.model) setModel(cfg.model);
       if (cfg.persona) setPersona(cfg.persona);
+      if (cfg.workingDir) {
+        workingDirRef.current = cfg.workingDir;
+      }
+      loadModels();
+    });
+
+    const unsubscribe = window.nativeApi?.onConfigChange?.((cfg) => {
+      if (cfg.model) setModel(cfg.model);
+      if (cfg.persona) setPersona(cfg.persona);
+      if (cfg.workingDir) {
+        workingDirRef.current = cfg.workingDir;
+      }
       loadModels();
     });
 
     loadModels();
+
+    return () => {
+      unsubscribe?.();
+    };
   }, []);
 
   const modelRef = useRef(model);
@@ -251,16 +289,21 @@ export const Chat = () => {
   personaRef.current = persona;
   const webSearchRef = useRef(useWebSearch);
   webSearchRef.current = useWebSearch;
+  const terminalAccessRef = useRef(terminalAccess);
+  terminalAccessRef.current = terminalAccess;
 
   const transport = useMemo(
     () =>
       new DefaultChatTransport({
-        api: `${import.meta.env.VITE_SERVER_URL}/chat`,
+        api: "/chat",
+        fetch: serverFetch,
         body: () => ({
           model: modelRef.current,
           persona: personaRef.current,
           webSearch: webSearchRef.current,
           openWindows: openWindowsRef.current,
+          terminalAccess: terminalAccessRef.current,
+          workingDir: workingDirRef.current || undefined,
         }),
       }),
     [],
@@ -462,38 +505,93 @@ export const Chat = () => {
         onNewChat={handleNewChat}
       />
 
+      {/* Command confirmation dialog for terminal access */}
+      {pendingCommand && (
+        <CommandConfirmDialog
+          open={!!pendingCommand}
+          command={pendingCommand.command}
+          description={pendingCommand.description}
+          cwd={pendingCommand.cwd}
+          onAllow={() => {
+            pendingCommand.resolve(true);
+            setPendingCommand(null);
+          }}
+          onDeny={() => {
+            pendingCommand.resolve(false);
+            setPendingCommand(null);
+          }}
+        />
+      )}
+
       {/* Top bar with model/persona selectors and actions */}
       <div className="flex items-center justify-between pb-2 border-b border-border/40 text-xs">
         <div className="flex items-center gap-1.5 min-w-0">
-          <select
-            value={persona}
-            onChange={(e) => setPersona(e.target.value)}
-            title="Active Persona"
-            className="h-6 rounded border border-border/60 bg-muted/30 px-1.5 text-[11px] font-medium text-foreground focus:outline-none"
-          >
-            {PERSONAS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              type="button"
+              title="Active Persona"
+              className="flex h-6 items-center gap-1 rounded border border-border/60 bg-muted/30 px-2 text-[11px] font-medium text-foreground hover:bg-muted/50 focus:outline-none cursor-pointer"
+            >
+              <span className="truncate">
+                {PERSONAS.find((p) => p.id === persona)?.name ?? persona}
+              </span>
+              <ChevronDown className="size-3 shrink-0 opacity-60" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-48">
+              <DropdownMenuRadioGroup
+                value={persona}
+                onValueChange={(val) => {
+                  if (val) setPersona(val);
+                }}
+              >
+                {PERSONAS.map((p) => (
+                  <DropdownMenuRadioItem key={p.id} value={p.id} closeOnClick>
+                    {p.name}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
-          <select
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            title="Language Model"
-            className="h-6 max-w-[130px] truncate rounded border border-border/60 bg-muted/30 px-1.5 text-[11px] text-muted-foreground focus:outline-none"
-          >
-            {modelsList.length === 0 ? (
-              <option value={model}>{model || "Loading free models..."}</option>
-            ) : (
-              modelsList.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name || m.id}
-                </option>
-              ))
-            )}
-          </select>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              type="button"
+              title="Language Model"
+              className="flex h-6 max-w-[140px] items-center gap-1 rounded border border-border/60 bg-muted/30 px-2 text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/50 focus:outline-none cursor-pointer"
+            >
+              <span className="truncate">
+                {modelsList.find((m) => m.id === model)?.name || model || "Loading..."}
+              </span>
+              <ChevronDown className="size-3 shrink-0 opacity-60" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-64 max-h-72 overflow-y-auto">
+              <DropdownMenuRadioGroup
+                value={model}
+                onValueChange={(val) => {
+                  if (val) setModel(val);
+                }}
+              >
+                {modelsList.length === 0 ? (
+                  <DropdownMenuRadioItem value={model || "default"} disabled>
+                    {model || "Loading free models..."}
+                  </DropdownMenuRadioItem>
+                ) : (
+                  modelsList.map((m) => (
+                    <DropdownMenuRadioItem key={m.id} value={m.id} closeOnClick>
+                      <div className="flex flex-col gap-0.5 min-w-0">
+                        <span className="font-medium truncate">{m.name || m.id}</span>
+                        {m.description && (
+                          <span className="text-[10px] text-muted-foreground line-clamp-1">
+                            {m.description}
+                          </span>
+                        )}
+                      </div>
+                    </DropdownMenuRadioItem>
+                  ))
+                )}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
@@ -602,7 +700,9 @@ export const Chat = () => {
                   p.type === "file" ||
                   p.type === "source-url" ||
                   p.type === "source-document" ||
-                  p.type === "reasoning",
+                  p.type === "reasoning" ||
+                  p.type === "dynamic-tool" ||
+                  p.type.startsWith("tool-"),
               );
 
               return (
@@ -682,8 +782,91 @@ export const Chat = () => {
                               </details>
                             );
                           }
-                          default:
+                          default: {
+                            if (part.type === "dynamic-tool" || part.type.startsWith("tool-")) {
+                              const p = part as unknown as {
+                                toolName?: string;
+                                toolCallId?: string;
+                                state?: string;
+                                input?: { command?: string; cwd?: string; description?: string };
+                                output?: { stdout?: string; stderr?: string; exitCode?: number };
+                                args?: { command?: string; cwd?: string; description?: string };
+                                result?: { stdout?: string; stderr?: string; exitCode?: number };
+                                errorText?: string;
+                              };
+                              const toolName =
+                                p.toolName ??
+                                (part.type === "dynamic-tool"
+                                  ? undefined
+                                  : part.type.replace(/^tool-/, ""));
+                              if (toolName !== "run_command") return null;
+
+                              const cmd = String(p.input?.command ?? p.args?.command ?? "");
+                              const cwd =
+                                (p.input?.cwd ?? p.args?.cwd)
+                                  ? String(p.input?.cwd ?? p.args?.cwd)
+                                  : undefined;
+                              const res = p.output ?? p.result;
+                              const isRunning =
+                                p.state === "input-streaming" ||
+                                p.state === "input-available" ||
+                                p.state === "call" ||
+                                p.state === "partial-call";
+
+                              return (
+                                <div
+                                  key={key}
+                                  className="my-1 rounded-md border border-border/50 bg-black/80 font-mono text-xs overflow-hidden"
+                                >
+                                  {/* Header */}
+                                  <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/30 bg-white/5">
+                                    <Terminal className="size-3 text-amber-400 shrink-0" />
+                                    <span className="text-amber-300/80 flex-1 truncate">{cmd}</span>
+                                    {isRunning && (
+                                      <Loader2Icon className="size-3 text-muted-foreground animate-spin shrink-0" />
+                                    )}
+                                    {!isRunning && res && (
+                                      <span
+                                        className={`text-[10px] shrink-0 ${
+                                          res.exitCode === 0 ? "text-green-500" : "text-red-400"
+                                        }`}
+                                      >
+                                        exit {res.exitCode}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {/* CWD */}
+                                  {cwd && (
+                                    <div className="px-3 py-0.5 text-[10px] text-blue-400/60 border-b border-border/20">
+                                      in: {cwd}
+                                    </div>
+                                  )}
+                                  {/* Output */}
+                                  {isRunning && !res && (
+                                    <div className="px-3 py-2 text-muted-foreground/60 italic text-[11px]">
+                                      Running…
+                                    </div>
+                                  )}
+                                  {res?.stdout && (
+                                    <pre className="px-3 py-2 text-green-300 whitespace-pre-wrap break-all leading-relaxed max-h-64 overflow-y-auto">
+                                      {res.stdout}
+                                    </pre>
+                                  )}
+                                  {res?.stderr && (
+                                    <pre className="px-3 py-2 text-red-400 whitespace-pre-wrap break-all leading-relaxed border-t border-border/30 max-h-32 overflow-y-auto">
+                                      {res.stderr}
+                                    </pre>
+                                  )}
+                                  {p.errorText && (
+                                    <pre className="px-3 py-2 text-red-400 whitespace-pre-wrap break-all leading-relaxed border-t border-border/30 max-h-32 overflow-y-auto">
+                                      {p.errorText}
+                                    </pre>
+                                  )}
+                                </div>
+                              );
+                            }
                             return null;
+                          }
                         }
                       })}
                       {!hasContent && (
@@ -769,6 +952,22 @@ export const Chat = () => {
               <GlobeIcon size={15} />
               <span className="hidden sm:inline text-xs">Search</span>
             </PromptInputButton>
+            {window.nativeApi?.execCommand && (
+              <PromptInputButton
+                onClick={() => setTerminalAccess(!terminalAccess)}
+                tooltip={{
+                  content: terminalAccess
+                    ? "Terminal access ON — model can run commands"
+                    : "Terminal access OFF — click to enable",
+                  shortcut: "Allow model to run shell commands",
+                }}
+                variant={terminalAccess ? "default" : "ghost"}
+                aria-pressed={terminalAccess}
+              >
+                <Terminal size={15} />
+                <span className="hidden sm:inline text-xs">Terminal</span>
+              </PromptInputButton>
+            )}
           </PromptInputTools>
           <div className="flex items-center gap-2">
             <span className="hidden text-[10px] text-muted-foreground sm:block">Enter to send</span>

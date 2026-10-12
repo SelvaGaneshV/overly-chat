@@ -3,6 +3,7 @@ export interface ChatConfig {
   model: string;
   instructions: string;
   persona?: string;
+  workingDir?: string;
 }
 
 export interface WindowConfig {
@@ -43,14 +44,20 @@ declare global {
       expandFromBubble: () => void;
       getConfig: () => Promise<AppConfig>;
       saveConfig: (config: AppConfig) => Promise<void>;
+      getServerInfo?: () => Promise<{ port: number; url: string; token: string }>;
       closeWindow: () => void;
       setGhostMode: (enabled: boolean) => void;
       captureScreen: () => Promise<string | null>;
       getOpenWindows?: () => Promise<OpenWindowInfo[]>;
       captureWindow?: (windowId: string) => Promise<string | null>;
+      execCommand?: (opts: {
+        command: string;
+        cwd?: string;
+      }) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
       onGhostModeChange: (callback: (enabled: boolean) => void) => () => void;
       onRequestMinimize?: (callback: () => void) => () => void;
       onRequestExpand?: (callback: () => void) => () => void;
+      onConfigChange?: (callback: (config: AppConfig) => void) => () => void;
     };
     desktopBridge?: unknown;
   }

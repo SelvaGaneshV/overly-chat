@@ -5,6 +5,7 @@ export interface ChatConfig {
   model: string;
   instructions: string;
   persona?: string;
+  workingDir?: string;
 }
 
 export interface WindowConfig {
@@ -48,12 +49,19 @@ contextBridge.exposeInMainWorld("nativeApi", {
   expandFromBubble: () => ipcRenderer.send("expand-from-bubble"),
   getConfig: (): Promise<AppConfig> => ipcRenderer.invoke("get-config"),
   saveConfig: (config: AppConfig) => ipcRenderer.invoke("save-config", config),
+  getServerInfo: (): Promise<{ port: number; url: string; token: string }> =>
+    ipcRenderer.invoke("get-server-info"),
   closeWindow: () => ipcRenderer.send("close-window"),
   setGhostMode: (enabled: boolean) => ipcRenderer.send("set-ghost-mode", enabled),
   captureScreen: (): Promise<string | null> => ipcRenderer.invoke("capture-screen"),
   getOpenWindows: (): Promise<OpenWindowInfo[]> => ipcRenderer.invoke("get-open-windows"),
   captureWindow: (windowId: string): Promise<string | null> =>
     ipcRenderer.invoke("capture-window", windowId),
+  execCommand: (opts: {
+    command: string;
+    cwd?: string;
+  }): Promise<{ stdout: string; stderr: string; exitCode: number }> =>
+    ipcRenderer.invoke("exec-command", opts),
   onGhostModeChange: (callback: (enabled: boolean) => void) => {
     const handler = (_: unknown, enabled: boolean) => callback(enabled);
     ipcRenderer.on("ghost-mode-changed", handler);
@@ -73,6 +81,13 @@ contextBridge.exposeInMainWorld("nativeApi", {
     ipcRenderer.on("request-expand", handler);
     return () => {
       ipcRenderer.removeListener("request-expand", handler);
+    };
+  },
+  onConfigChange: (callback: (config: AppConfig) => void) => {
+    const handler = (_: unknown, config: AppConfig) => callback(config);
+    ipcRenderer.on("config-changed", handler);
+    return () => {
+      ipcRenderer.removeListener("config-changed", handler);
     };
   },
 });

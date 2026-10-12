@@ -41,13 +41,13 @@ pnpm install
 
 ```env
 OPENROUTER_API_KEY=sk-or-v1-...
-CORS_ORIGIN=http://localhost:3001
+CORS_ORIGIN=http://localhost:38881
 ```
 
 `apps/web/.env`
 
 ```env
-VITE_SERVER_URL=http://localhost:3000
+VITE_SERVER_URL=http://localhost:38880
 ```
 
 ### Dev
@@ -61,9 +61,9 @@ pnpm dev
 Or individually:
 
 ```bash
-pnpm dev:web       # React frontend on :3001
-pnpm dev:server    # Hono server on :3000
-pnpm dev:desktop   # Electron app (connects to :3001)
+pnpm dev:web       # React frontend on :38881
+pnpm dev:server    # Hono server on :38880
+pnpm dev:desktop   # Electron app (connects to :38881)
 ```
 
 ### Build & Package

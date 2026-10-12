@@ -3,10 +3,19 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import { Button } from "@overly-chat/ui/components/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@overly-chat/ui/components/dropdown-menu";
 import { Input } from "@overly-chat/ui/components/input";
 import { Separator } from "@overly-chat/ui/components/separator";
 import { Skeleton } from "@overly-chat/ui/components/skeleton";
+import { ChevronDown } from "lucide-react";
 import { isElectron } from "../../env";
+import { serverFetch } from "../../lib/server-api";
 
 export const Route = createFileRoute("/_layout/settings")({
   component: SettingsComponent,
@@ -107,11 +116,12 @@ function SettingsComponent() {
       persona: "general",
       alwaysOnTop: true,
       opacity: 0.96,
+      workingDir: "",
     },
     onSubmit: async ({ value }) => {
       await window.nativeApi?.saveConfig(value);
       setSaved(true);
-      fetch(`${import.meta.env.VITE_SERVER_URL}/models`)
+      serverFetch("/models")
         .then((res) => res.json())
         .then((data) => {
           if (Array.isArray(data?.models) && data.models.length > 0) {
@@ -125,7 +135,7 @@ function SettingsComponent() {
 
   useEffect(() => {
     const loadModels = () => {
-      fetch(`${import.meta.env.VITE_SERVER_URL}/models`)
+      serverFetch("/models")
         .then((res) => res.json())
         .then((data) => {
           if (Array.isArray(data?.models) && data.models.length > 0) {
@@ -146,6 +156,7 @@ function SettingsComponent() {
       form.setFieldValue("persona", config.persona || "general");
       form.setFieldValue("alwaysOnTop", config.alwaysOnTop);
       form.setFieldValue("opacity", config.opacity ?? 0.96);
+      form.setFieldValue("workingDir", config.workingDir ?? "");
       setLoading(false);
       loadModels();
     });
@@ -300,17 +311,36 @@ function SettingsComponent() {
                   label="Active Persona"
                   description="Choose assistant specialization style."
                   control={
-                    <select
-                      value={field.state.value}
-                      onChange={(e) => field.handleChange(e.target.value)}
-                      className="rounded border border-input bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                    >
-                      {PERSONAS.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        type="button"
+                        className="flex h-8 items-center justify-between gap-2 rounded border border-input bg-background px-2.5 py-1 text-xs text-foreground hover:bg-muted/40 focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer min-w-44"
+                      >
+                        <span className="truncate">
+                          {PERSONAS.find((p) => p.id === field.state.value)?.name ?? field.state.value}
+                        </span>
+                        <ChevronDown className="size-3.5 shrink-0 opacity-60" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-56">
+                        <DropdownMenuRadioGroup
+                          value={field.state.value}
+                          onValueChange={(val) => {
+                            if (val) field.handleChange(val);
+                          }}
+                        >
+                          {PERSONAS.map((p) => (
+                            <DropdownMenuRadioItem key={p.id} value={p.id} closeOnClick>
+                              <div>
+                                <div className="font-medium">{p.name}</div>
+                                {p.description && (
+                                  <div className="text-[10px] text-muted-foreground">{p.description}</div>
+                                )}
+                              </div>
+                            </DropdownMenuRadioItem>
+                          ))}
+                        </DropdownMenuRadioGroup>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   }
                 />
               )}
@@ -342,23 +372,46 @@ function SettingsComponent() {
                       className="w-full h-8 text-xs"
                     />
                   ) : (
-                    <select
-                      value={field.state.value}
-                      onChange={(e) => field.handleChange(e.target.value)}
-                      className="w-full rounded border border-input bg-background px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                    >
-                      {models.length === 0 ? (
-                        <option value={field.state.value}>
-                          {field.state.value || "Loading free models..."}
-                        </option>
-                      ) : (
-                        models.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.name || m.id}
-                          </option>
-                        ))
-                      )}
-                    </select>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        type="button"
+                        className="flex w-full h-8 items-center justify-between gap-2 rounded border border-input bg-background px-2.5 py-1.5 text-xs text-foreground hover:bg-muted/40 focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer"
+                      >
+                        <span className="truncate">
+                          {models.find((m) => m.id === field.state.value)?.name ||
+                            field.state.value ||
+                            "Select a model..."}
+                        </span>
+                        <ChevronDown className="size-3.5 shrink-0 opacity-60" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="w-(--anchor-width) min-w-[280px] max-h-72 overflow-y-auto">
+                        <DropdownMenuRadioGroup
+                          value={field.state.value}
+                          onValueChange={(val) => {
+                            if (val) field.handleChange(val);
+                          }}
+                        >
+                          {models.length === 0 ? (
+                            <DropdownMenuRadioItem value={field.state.value || "default"} disabled>
+                              {field.state.value || "Loading free models..."}
+                            </DropdownMenuRadioItem>
+                          ) : (
+                            models.map((m) => (
+                              <DropdownMenuRadioItem key={m.id} value={m.id} closeOnClick>
+                                <div className="flex flex-col gap-0.5 min-w-0">
+                                  <span className="font-medium truncate">{m.name || m.id}</span>
+                                  {m.description && (
+                                    <span className="text-[10px] text-muted-foreground line-clamp-1">
+                                      {m.description}
+                                    </span>
+                                  )}
+                                </div>
+                              </DropdownMenuRadioItem>
+                            ))
+                          )}
+                        </DropdownMenuRadioGroup>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   )}
                 </div>
               )}
@@ -380,6 +433,26 @@ function SettingsComponent() {
                     onChange={(e) => field.handleChange(e.target.value)}
                     onBlur={field.handleBlur}
                     className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-none mt-1"
+                  />
+                )}
+              </form.Field>
+            </div>
+
+            <Separator />
+
+            <div className="flex flex-col gap-1.5 py-2">
+              <span className="text-xs font-medium">Working Directory (Optional)</span>
+              <span className="text-[11px] text-muted-foreground">
+                Default folder for terminal commands. Defaults to your home directory.
+              </span>
+              <form.Field name="workingDir">
+                {(field) => (
+                  <Input
+                    placeholder={`e.g. C:\\Users\\you\\projects\\my-app`}
+                    value={field.state.value}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                    onBlur={field.handleBlur}
+                    className="w-full h-8 text-xs font-mono"
                   />
                 )}
               </form.Field>

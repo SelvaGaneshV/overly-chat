@@ -11,12 +11,16 @@ import {
   screen,
   Tray,
 } from "electron";
-import { fork, type ChildProcess } from "node:child_process";
+import { exec, fork, type ChildProcess } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
+const sessionToken = crypto.randomUUID();
+let serverPort = env.PORT;
+
 const CONFIG_PATH = path.join(app.getPath("userData"), "config.json");
-const SERVER_CONFIG_PATH = path.join(app.getPath("userData"), "server-config.json");
 
 const readConfig = async (): Promise<Record<string, string>> => {
   try {
@@ -41,49 +45,78 @@ const writeConfig = async (data: Record<string, string>) => {
   await fs.writeFile(CONFIG_PATH, JSON.stringify(toSave, null, 2), "utf-8");
 };
 
-const writeServerConfig = async (config: Record<string, any>) => {
-  const payload = JSON.stringify(
-    {
-      apiKey: config.apiKey ?? "",
-      model: config.model ?? "",
-      instructions: config.instructions ?? "",
-      persona: config.persona ?? "",
-    },
-    null,
-    2,
-  );
-  try {
-    await fs.writeFile(SERVER_CONFIG_PATH, payload, "utf-8");
-  } catch (err) {
-    console.warn("Failed to write to SERVER_CONFIG_PATH:", err);
+let serverProcess: ChildProcess | null = null;
+
+const syncConfigToServer = async (config: Record<string, any>) => {
+  const payload = {
+    apiKey: config.apiKey ?? "",
+    model: config.model ?? "",
+    instructions: config.instructions ?? "",
+    persona: config.persona ?? "",
+    workingDir: config.workingDir ?? "",
+  };
+
+  // 1. Send via in-memory IPC pipe to child process (when forked)
+  if (serverProcess?.send) {
+    try {
+      serverProcess.send({ type: "SET_CONFIG", config: payload });
+    } catch (err) {
+      console.warn("Failed to send config over IPC pipe:", err);
+    }
   }
 
+  // 2. Also sync to in-memory endpoint on localhost (handles standalone dev server)
   try {
-    const devServerConfig = path.join(__dirname, "..", "..", "server", "server-config.json");
-    await fs.writeFile(devServerConfig, payload, "utf-8");
+    await fetch(`http://127.0.0.1:${serverPort}/internal/config`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sessionToken}`,
+      },
+      body: JSON.stringify(payload),
+    });
   } catch {
-    // Expected in packaged build
+    // Server may still be starting up, harmless
   }
 };
 
-let serverProcess: ChildProcess | null = null;
-
 const startServer = async (config: Record<string, string>) => {
-  await writeServerConfig(config);
   await new Promise<void>((resolve, reject) => {
+    // In production or desktop packaging, bind to dynamic port 0 for zero collisions
+    const portToUse = isDev && process.env.OVERLY_FIXED_PORT ? String(env.PORT) : "0";
+
     serverProcess = fork(path.join(__dirname, "server.cjs"), [], {
       stdio: "inherit",
       env: {
         ...process.env,
-        SERVER_CONFIG_PATH,
-        PORT: "3000",
+        PORT: portToUse,
+        HOST: "127.0.0.1",
+        OVERLY_SESSION_TOKEN: sessionToken,
       },
     });
-    serverProcess.once("message", (msg) => {
-      if (msg === "ready") resolve();
+
+    const onReady = (assignedPort?: number) => {
+      if (assignedPort) {
+        serverPort = assignedPort;
+      }
+      syncConfigToServer(config);
+      resolve();
+    };
+
+    serverProcess.on("message", (msg) => {
+      if (msg && typeof msg === "object" && (msg as { type?: string }).type === "ready") {
+        const p = (msg as { port?: number }).port;
+        onReady(p);
+      } else if (msg === "ready") {
+        onReady();
+      }
     });
+
     serverProcess.once("error", reject);
-    setTimeout(resolve, 3000);
+    setTimeout(() => {
+      syncConfigToServer(config);
+      resolve();
+    }, 3000);
   });
 };
 
@@ -435,6 +468,38 @@ const createWindow = async () => {
     }
   });
 
+  ipcMain.handle("exec-command", async (_, { command, cwd }: { command: string; cwd?: string }) => {
+    let resolvedCwd = os.homedir();
+    if (cwd) {
+      try {
+        await fs.access(cwd);
+        resolvedCwd = cwd;
+      } catch {
+        // Fall back to home if path doesn't exist
+      }
+    }
+    return new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+      const proc = exec(
+        command,
+        {
+          cwd: resolvedCwd,
+          timeout: 30_000,
+          shell: process.platform === "win32" ? "cmd.exe" : "/bin/sh",
+        },
+        (err, stdout, stderr) => {
+          resolve({
+            stdout: stdout.slice(0, 20_000),
+            stderr: stderr.slice(0, 5_000),
+            exitCode: typeof err?.code === "number" ? err.code : err ? 1 : 0,
+          });
+        },
+      );
+      proc.on("error", (err) => {
+        resolve({ stdout: "", stderr: err.message, exitCode: 1 });
+      });
+    });
+  });
+
   ipcMain.on("resize-chat-window", (_, size: { width: number; height: number }) => {
     if (!mainWindow || mainWindow.isDestroyed() || isBubble) return;
     const reqW = Number(size?.width);
@@ -614,7 +679,21 @@ app.on("ready", async () => {
   if (config.apiKey) {
     await writeConfig(config);
   }
-  await writeServerConfig(config);
+
+  if (!isDev) {
+    await startServer(config);
+  } else {
+    // In dev mode, sync config to local dev server in memory
+    syncConfigToServer(config);
+  }
+
+  ipcMain.handle("get-server-info", () => {
+    return {
+      port: serverPort,
+      url: `http://127.0.0.1:${serverPort}`,
+      token: sessionToken,
+    };
+  });
 
   ipcMain.handle("get-config", async () => {
     const c = await readConfig();
@@ -625,6 +704,7 @@ app.on("ready", async () => {
       persona: c.persona ?? "general",
       alwaysOnTop: c.alwaysOnTop !== "false",
       opacity: c.opacity ? Number(c.opacity) : 0.96,
+      workingDir: c.workingDir ?? "",
     };
   });
 
@@ -639,15 +719,17 @@ app.on("ready", async () => {
         persona?: string;
         alwaysOnTop: boolean;
         opacity?: number;
+        workingDir?: string;
       },
     ) => {
-      const { alwaysOnTop, opacity, ...rest } = cfg;
+      const { alwaysOnTop, opacity, workingDir, ...rest } = cfg;
       await writeConfig({
         ...rest,
         alwaysOnTop: String(alwaysOnTop),
         opacity: String(opacity ?? 0.96),
+        ...(workingDir !== undefined ? { workingDir } : {}),
       });
-      await writeServerConfig(cfg);
+      await syncConfigToServer(cfg);
 
       const win = mainWindow ?? BrowserWindow.getAllWindows()[0];
       if (win) {
@@ -655,11 +737,10 @@ app.on("ready", async () => {
         if (typeof opacity === "number" && opacity >= 0.2 && opacity <= 1.0) {
           win.setOpacity(opacity);
         }
+        win.webContents.send("config-changed", cfg);
       }
     },
   );
-
-  if (!isDev) await startServer(config);
 
   await createWindow();
   createTray();

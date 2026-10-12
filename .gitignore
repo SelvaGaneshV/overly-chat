@@ -13,9 +13,10 @@ build
 # Generated files
 apps/web/src/routeTree.gen.ts
 
-# Environment variables
+# Environment variables & local secrets
 .env
 .env*.local
+server-config.json
 
 # IDEs and editors
 .vscode/*

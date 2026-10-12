@@ -1,13 +1,13 @@
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { ToolLoopAgent } from "ai";
-import fs from "node:fs";
-import path from "node:path";
+import { execTool } from "../tools/exec-tool";
 
 interface ServerConfig {
   apiKey: string;
   model: string;
   instructions: string;
   persona?: string;
+  workingDir?: string;
 }
 
 const defaultPortfolioInstructions = `You are a software engineer and full-stack developer, You have approximately 2.7 years of professional experience , where you build a low-code platform.
@@ -62,74 +62,31 @@ Guidelines:
   },
 };
 
+let inMemoryConfig: Partial<ServerConfig> = {};
+
+export const setInMemoryConfig = (config: Partial<ServerConfig>): void => {
+  inMemoryConfig = {
+    ...inMemoryConfig,
+    ...config,
+  };
+};
+
+export const getInMemoryConfig = (): Partial<ServerConfig> => inMemoryConfig;
+
 export const resolveConfig = (explicitApiKey?: string): ServerConfig => {
-  let fileConfig: Partial<ServerConfig> = {};
-
-  const candidates: string[] = [];
-  if (process.env.SERVER_CONFIG_PATH) {
-    candidates.push(process.env.SERVER_CONFIG_PATH);
-  }
-
-  // Current working directory and server directory
-  candidates.push(path.join(process.cwd(), "server-config.json"));
-  candidates.push(path.join(process.cwd(), "apps", "server", "server-config.json"));
-
-  // Standard OS userData paths for Electron
-  const appData =
-    process.env.APPDATA ||
-    (process.platform === "darwin"
-      ? path.join(process.env.HOME || "", "Library", "Application Support")
-      : path.join(process.env.HOME || "", ".config"));
-
-  if (appData) {
-    candidates.push(path.join(appData, "Overly Chat", "config.json"));
-    candidates.push(path.join(appData, "Overly Chat", "server-config.json"));
-    candidates.push(path.join(appData, "Overly", "config.json"));
-    candidates.push(path.join(appData, "Overly", "server-config.json"));
-    candidates.push(path.join(appData, "overly-chat", "config.json"));
-    candidates.push(path.join(appData, "overly-chat", "server-config.json"));
-  }
-
-  for (const candidate of candidates) {
-    try {
-      if (fs.existsSync(candidate)) {
-        const raw = fs.readFileSync(candidate, "utf-8");
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === "object") {
-          const candidateKey = typeof parsed.apiKey === "string" ? parsed.apiKey.trim() : "";
-          const isEncrypted =
-            candidateKey.length > 50 &&
-            candidateKey.includes("/") &&
-            candidateKey.includes("+") &&
-            candidateKey.endsWith("=");
-          const isUsableKey = candidateKey.length > 0 && !isEncrypted;
-
-          fileConfig = {
-            ...fileConfig,
-            ...parsed,
-            ...(isUsableKey ? { apiKey: candidateKey } : { apiKey: fileConfig.apiKey || "" }),
-          };
-
-          if (fileConfig.apiKey) break;
-        }
-      }
-    } catch {
-      // Continue checking next candidate
-    }
-  }
-
   const resolvedApiKey = (
     explicitApiKey ||
-    fileConfig.apiKey ||
+    inMemoryConfig.apiKey ||
     process.env.OPENROUTER_API_KEY ||
     ""
   ).trim();
 
   return {
     apiKey: resolvedApiKey,
-    model: fileConfig.model || process.env.AGENT_MODEL || "openrouter/free",
-    instructions: fileConfig.instructions || process.env.AGENT_INSTRUCTIONS || "",
-    persona: fileConfig.persona || "general",
+    model: inMemoryConfig.model || process.env.AGENT_MODEL || "openrouter/free",
+    instructions: inMemoryConfig.instructions || process.env.AGENT_INSTRUCTIONS || "",
+    persona: inMemoryConfig.persona || "general",
+    workingDir: inMemoryConfig.workingDir || "",
   };
 };
 
@@ -145,9 +102,11 @@ export interface AgentOptions {
   instructions?: string;
   apiKey?: string;
   openWindows?: OpenWindowContext[];
+  terminalAccess?: boolean;
+  workingDir?: string;
 }
 
-export const createCopilotAgent = (opts?: AgentOptions): ToolLoopAgent => {
+export const createCopilotAgent = (opts?: AgentOptions): ToolLoopAgent<never, any> => {
   const config = resolveConfig(opts?.apiKey);
   const apiKey = opts?.apiKey || config.apiKey;
   const openrouter = createOpenRouter({ apiKey });
@@ -170,9 +129,22 @@ ${opts.openWindows.map((w, i) => `${i + 1}. "${w.name}"`).join("\n")}
 You have direct awareness of the user's open windows. When the user asks what windows they have open, or refers to their code, editor, browser, terminal, or any open app, answer with direct knowledge of these active windows.`
       : "";
 
+  const effectiveWorkingDir = opts?.workingDir || config.workingDir;
+  const terminalInstructions = opts?.terminalAccess
+    ? `\n\nTerminal Access: You have the ability to run shell commands on the user's machine using the \`run_command\` tool.${effectiveWorkingDir ? ` The user's working directory is: ${effectiveWorkingDir}` : ""}\nUse it to:\n- Read files: \`cat file.txt\`, \`ls -la\`\n- Run builds/tests: \`npm run build\`, \`pnpm test\`\n- Install packages: \`npm install package\`\n- Git operations: \`git status\`, \`git log --oneline -10\`\n\nAlways explain what command you are running and why before calling the tool. Show the output to the user. If a command fails, diagnose the error and suggest a fix. Use the user's working directory as the default \`cwd\` unless the user specifies otherwise.`
+    : "";
+
   const systemInstructions = customInstructions
-    ? `${customInstructions}${webSearchInstructions}${windowsInstructions}`
-    : `${personaPrompt}${webSearchInstructions}${windowsInstructions}`;
+    ? `${customInstructions}${webSearchInstructions}${windowsInstructions}${terminalInstructions}`
+    : `${personaPrompt}${webSearchInstructions}${windowsInstructions}${terminalInstructions}`;
+
+  if (opts?.terminalAccess) {
+    return new ToolLoopAgent({
+      model: openrouter(selectedModel),
+      instructions: systemInstructions,
+      tools: { run_command: execTool },
+    });
+  }
 
   return new ToolLoopAgent({
     model: openrouter(selectedModel),
